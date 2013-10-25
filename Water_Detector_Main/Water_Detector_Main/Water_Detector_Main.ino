@@ -1,7 +1,7 @@
 // See Readme.txt file
 
 
-// #include "Arduino.h"
+#include "Arduino.h"
 #include <SPI.h>           // Allows you to communicate with SPI devices. See: http://arduino.cc/en/Reference/SPI
 #include <Ethernet.h>      // http://arduino.cc/en/Reference/Ethernet
 #include <Twitter.h>       // http://arduino.cc/playground/Code/TwitterLibrary
@@ -23,6 +23,7 @@ byte ip[] = { 192, 168, 46, 81 };   // Vermont
 
 // Analog inputs 0 & 1 are configured as Digitol I/O.
 //      Name              I/O    Description
+#define ISWETOUTPUT         0   // Turns on Red LED and relay
 #define HOTTUBFILTER        6   // Sponge in crawlspace by hot tub filter and pump
 #define HOTTUBBACK          7   // Sponge in crawlspace behind hot tub
 #define WATERTANK           8   // Sponge in crawlspace corner by water tank
@@ -152,6 +153,9 @@ void setup ()
   
   for (byte i = 0; i < NUMWIREDINPUTS; i++)
   {  pinMode(InputPinNum[i], INPUT); }
+  pinMode(ISWETOUTPUT, OUTPUT);  // turns on red LED and reed relay
+  digitalWrite(ISWETOUTPUT, LOW);
+  
 
   // Initialiaze one shot triggers for messages
   masterBath.lowVoltMsgFlag = false;
@@ -212,6 +216,15 @@ void loop ()
       checkNtpTimer = millis() + MINUTE;  // try again in 1 minute
     } 
   }
+
+  // If anythinbg is wet, turn on LED and relay (they are on the same output
+  bool wetOutputState = LOW;
+  for(int i = 0; i < NUMWIREDINPUTS + NUMTRANSMITTERS; i++)
+  {
+    if( WaterDetect[i] == WET )
+    { wetOutputState = HIGH; }
+  }    
+  digitalWrite(ISWETOUTPUT, wetOutputState);  // turn on Red LED and Relay if anything is wet
 
 }  // end loop()
 
@@ -338,8 +351,8 @@ void ProcessSensors()
   {
     if( (isWet[i] == WET) && (WaterDetect[i] == DRY) && ((long)(millis() - DoubleCheckTime[i]) >= 0) )
     {
-      WaterDetect[i] = WET;    // Sponge is still wet after delay
-      SendAlert(i , WET);   // One of the inputs is still wet after DOUBLE_CHECK_DELAY.  Send Tweet out
+      WaterDetect[i] = WET;  // Sponge is still wet after delay
+      SendAlert(i , WET);    // One of the inputs is still wet after DOUBLE_CHECK_DELAY.  Send Tweet out
     }
   } // End double check for wet sponge
   
