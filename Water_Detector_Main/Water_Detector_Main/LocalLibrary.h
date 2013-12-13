@@ -18,8 +18,8 @@
 
 
 typedef struct {
-  bool online;         // True if panStamp is online
-  byte ID;             // panStamp Transmitter ID
+  bool online;         // True if wireless sensor is online
+  byte ID;             // wireless sensor Transmitter ID
   bool IsWet;          // Wet = true, Dry = false
   int temp;            // temp from TMP36
   bool lowTempMsgFlag; // one shot trigger for low temp tweet

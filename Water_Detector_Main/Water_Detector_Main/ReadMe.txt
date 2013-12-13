@@ -2,13 +2,11 @@
 
 To Do:
 Take out Tweet counter if no problems after a few months
-Send a tweet if remote sensors go offline for more then a few minutes
-See if you can request specific panStamp Tx data via I2C instead of sending both panStamps together in one packet
-Take a look at how your handle a panStamp being offline and see if you're doing it the best way
 Consider replacing Twitter with Tropo.com SMS service
-Sunday heartbeat is not reliable
 Put Remote sensors in a class or namespace
-
+Figure out how to set time when you can't connect to NTP server
+Update V3 on PCB so ISCP pins can come out of bottom of Leonardo
+If remote sensors come online after being offline, send a tweet that it's online. With it send hours it was down and battery volts
 
 ====================
 Water Leak Detector.  Detects water leaks using sponge and op-amp circuit. 
@@ -18,7 +16,7 @@ Arduino needs impedance of inputs to be 10k or less, so an op-amp is used to sen
 is wet.  A high input means it's dry, low is wet.  
 
 For sponges that are too far to be hard wired to the op-amps, pansStamps RF devices are used.  
-A panStamp should be able to runfor a couple months on one CR123 battery. 
+A panStamp should be able to run for a couple months on one CR123 battery. 
 
 There are two panStamps transmitting wet/dry status.  They also transmit their ID, battery voltage and temperature.
 They sleep for 8 seconds, wake up for 1/2 second to transmit, then repeat.
@@ -61,7 +59,7 @@ See this Arduino Thread forum on a discussion on reading inputs and using an Op 
 I2C wiring
 panStamp: A4 & A5
 Leonardo D2 (SDA), D3 (SCL)
-4.7k pullup resistors to 3v
+4.7k pul-lup resistors to 3v
 
 
 I2C Data packet 

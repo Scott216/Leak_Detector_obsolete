@@ -1,5 +1,5 @@
 // See Readme.txt file
-
+// directory cd Dropbox/Arduino/Water_Detector/ 
 
 #include "Arduino.h"
 #include <SPI.h>           // Allows you to communicate with SPI devices. See: http://arduino.cc/en/Reference/SPI
@@ -7,11 +7,13 @@
 #include <Twitter.h>       // http://arduino.cc/playground/Code/TwitterLibrary
 #include <I2C.h>           // http://github.com/rambo/I2C
 #include <Tokens.h>        // Contains Twitter token
+#include <Adafruit_GFX.h>   // http://github.com/adafruit/Adafruit-GFX-Library
+#include <SSD1306_I2C_DSS.h> // For OLED  https://github.com/Scott216/SSD1306_I2C_DSS
 #include "LocalLibrary.h"  // Include application, user and local libraries
+#include <avr/pgmspace.h>
 
-
-#define CRESTVIEW     // Comment this out when in Vermont
-#define PRINT_DEBUG      // Comment this out to turn off verbose printing
+// #define CRESTVIEW     // Comment this out when in Vermont
+// #define PRINT_DEBUG      // Comment this out to turn off verbose printing
 
 byte mac[] = { 0x90, 0xA2, 0xDA, 0xEF, 0x46, 0x81 };
 
@@ -24,6 +26,10 @@ byte ip[] = { 192, 168, 46, 81 };   // Vermont
 // Analog inputs 0 & 1 are configured as Digitol I/O.
 //      Name              I/O    Description
 #define ISWETOUTPUT         0   // Turns on Red LED and relay
+#define OLED_RESET          1
+// IC2                     2,3
+// Reserved for SD Card     4
+// Pad for future use       5
 #define HOTTUBFILTER        6   // Sponge in crawlspace by hot tub filter and pump
 #define HOTTUBBACK          7   // Sponge in crawlspace behind hot tub
 #define WATERTANK           8   // Sponge in crawlspace corner by water tank
@@ -51,8 +57,13 @@ const byte ADDRMASTERBATH =     1;  // panStamp device address for 2nd floor mas
 const byte ADDRGUESTBATH =      2;  // panStamp device address for 2nd floor guest bath
 const byte NUMTRANSMITTERS =    2;  // number of panStamp transmitters on this network
 const byte NUMWIREDINPUTS =    12;  // Number of wired water detector inputs
-bool gotI2CPacket = false;          // Flag to indicate I2C packet came in.  Sketch needs to know when I2C is working so it doesn't process bad data
+bool gotI2CPacket =         false;  // Flag to indicate I2C packet came in.  Sketch needs to know when I2C is working so it doesn't process bad data
 uint32_t checkNtpTimer =        0;  // Countdown timer to check NTP time
+bool isAnythingWet =        false;  // flag if any sensors are wet
+bool masterTxOfflineMsg =   false;  // One shot flag when Master Bath transmitter goes offline
+bool guestTxOfflineMsg =    false;  // One shot flag when Guest Bath transmitter goes offline
+uint32_t masterBathOfflineTime;     // Time master bath sensor went offline
+uint32_t guestBathOfflineTime;      // Time guest bath sensor went offline
 
 #define ADDRSLAVEI2C  21 // I2C Slave address of panStamp Rx
 
@@ -63,14 +74,13 @@ bool     WaterDetect[     NUMWIREDINPUTS + NUMTRANSMITTERS];     // Sensor state
 uint32_t DoubleCheckTime[ NUMWIREDINPUTS + NUMTRANSMITTERS];     // Used to wait a few minutes after a sensor is triggered to check the sensor a 2nd time to see if there is still water. Like button debouncing
 uint32_t WetToDryDelay[   NUMWIREDINPUTS + NUMTRANSMITTERS];     // Delay used to let sponge dry out before indicating it's dry
 uint32_t weeklyHeartbeatTimer = 0;                               // mS until Sunday at noon, at which time a tweet will go out to verify sketch is still running  static uint8_t TweetCounter;  // prevent tweets from getting to high
-uint8_t  TweetCounter = 0;                                       // prevent tweets from getting to high, stop tweeting after 50 tweets.  Reset every Sunday, same time as heartbeat tweet
-uint32_t CheckSensorsTimer = 0;                                  // Timer to check the sensors every second
-uint32_t lastNtpTimeCheck = 0;                                   // Last time NPT was checked, don't do within 4 seconds
+uint8_t  TweetCounter =         0;                               // prevent tweets from getting to high, stop tweeting after 50 tweets.  Reset every Sunday, same time as heartbeat tweet
+uint32_t CheckSensorsTimer =    0;                               // Timer to check the sensors every second
+uint32_t lastNtpTimeCheck =     0;                               // Last time NPT was checked, don't do within 4 seconds
 
 // Define typedef structurs for panStamp data from remote sensors.  Typedef definition is in LocalLibrary.h
 RemoteSensorData_t masterBath;
 RemoteSensorData_t guestBath;
-
 
 // Token for Twitter Account
 Twitter twitter(TWITTER_TOKEN);
@@ -86,15 +96,12 @@ void ProcessSensors(void);
 int  SendTweet(char msgTweet[]);
 void PrintStates();
 uint32_t getMsUntilSundayNoon(uint8_t *ntpTime);  // mS until Sunday noon - for weeklyheartbeat timer
-void printf_begin(void);
-int  serial_putc(char c, FILE *);
 void software_Reset();
 bool setupNTPTime();
 bool getTime(uint8_t *ntpTime);
 void parseTimePacket(uint8_t *ntpTime);
 unsigned long sendNTPpacket(IPAddress& address);
-
-
+void updateOledDisplay();
 
 
 // Both these NPT servers work as of 4/17/13
@@ -103,8 +110,8 @@ unsigned long sendNTPpacket(IPAddress& address);
 IPAddress timeServer1( 216, 171, 112,  36); 
 IPAddress timeServer2( 206, 246, 122, 250);
 IPAddress timeServer3( 64,   90, 182,  55);  
-IPAddress timeServer4( 165, 193, 126, 229);  
-IPAddress timeServer5( 96,   47,  67, 105); 
+//IPAddress timeServer4( 165, 193, 126, 229);  
+//IPAddress timeServer5( 96,   47,  67, 105); 
 
 const int NTP_PACKET_SIZE= 48;           // NTP time stamp is in the first 48 bytes of the message
 byte packetBuffer[NTP_PACKET_SIZE];      //buffer to hold incoming and outgoing packets
@@ -112,20 +119,34 @@ byte packetBuffer[NTP_PACKET_SIZE];      //buffer to hold incoming and outgoing 
 // A UDP instance to let us send and receive packets over UDP
 EthernetUDP Udp;
 
+// Create OLED dispplay object
+Adafruit_SSD1306 display(OLED_RESET);
 
 
-//============================================================================
-//============================================================================
+//=========================================================================================================================
+//=========================================================================================================================
 void setup ()
 {  
   uint8_t ntpTime[6];
-  
-  Serial.begin(9600);
-  while (!Serial && millis() < 6000) {}  // for Leonardo wait here for up to 6 seconds for serial monitor connection
-  
-  printf_begin();  // Need this so the printf_P statements work
 
-  Serial.println(F("Leak Detector startup"));
+  // Initialize I2C communication
+  I2c.begin();
+  I2c.timeOut(30000);  // set I2C timeout to 30 seconds
+  I2c.pullup(0);       // disable internal pullup resistors on I2C pins, don't want to pull-up to 5volts because of panStamp
+
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3C (for the 128x32)
+  display.clearDisplay();   // clears the screen and buffer
+  display.setTextColor(WHITE);
+  display.setTextSize(2);
+  display.setCursor(0,10);
+  display.println("Startup");
+  display.display();
+
+  Serial.begin(9600);
+  #ifdef PRINT_DEBU
+    while (!Serial && millis() < 6000) {}  // for Leonardo wait here for up to 6 seconds for serial monitor connection
+    Serial.println(F("Leak Detector startup"));
+  #endif
   
   // Initialize Ethernet connection and UDP
   bool EthernetOK = setupNTPTime();
@@ -144,80 +165,87 @@ void setup ()
       #endif
     }
     else
-    { Serial.println(F("Failed to get NTP time in setup()")); }
+    { 
+      #ifdef PRINT_DEBUG
+        Serial.println(F("Failed to get NTP time in setup()")); 
+      #endif
+    }
   }
   
-  // Initialiae wire library for I2C communication
-  I2c.begin();
-  I2c.timeOut(30000);
   
-  for (byte i = 0; i < NUMWIREDINPUTS; i++)
+  for(int i = 0; i < NUMWIREDINPUTS; i++)
   {  pinMode(InputPinNum[i], INPUT); }
   pinMode(ISWETOUTPUT, OUTPUT);  // turns on red LED and reed relay
   digitalWrite(ISWETOUTPUT, LOW);
   
-
   // Initialiaze one shot triggers for messages
   masterBath.lowVoltMsgFlag = false;
   guestBath.lowVoltMsgFlag =  false;
   masterBath.lowTempMsgFlag = false;
   guestBath.lowTempMsgFlag =  false;
-  
-  SendTweet("VT Water Leak Detector Restarted. ");  // Send startup tweet
 
-  ProcessSensors();  // Check sensors to see if anything is wet
+  checkNtpTimer = millis() + (MINUTE * 60UL * 48UL);  // Initialize check NPT timer every 48 hours
+
+  SendTweet("Leak Detector Restarted");  // Send startup tweet
   
+  ProcessSensors();  // Check sensors to see if anything is wet
+
+  display.clearDisplay();
+  display.display();
+
 } // end setup()
 
 
-
-
-//============================================================================
-//============================================================================
+//=========================================================================================================================
+//=========================================================================================================================
 void loop ()
 {
-  
   if ( (long)(millis() - CheckSensorsTimer) >= 0 )
   {
+    display.setCursor(0,0);
+    display.println("CHECKING SENSORS...");
+    display.display();
+    
     ProcessSensors();  // Check sensors once a second to see if anything is wet
+    updateOledDisplay();
     CheckSensorsTimer = millis() + 1000UL;
   }
-  
   
   // Every Sunday at noon send a Tweet to indicate sketch is still running (heartbeat). Send battery voltages
   if( (long)(millis() - weeklyHeartbeatTimer) >= 0 )
   {
     TweetCounter = 0; // Reset Tweet Counter
-    char tweetMsg[100];
-    sprintf(tweetMsg, "Leak Detector: Master Bath = %d mV, Guest Bath = %d mV. ", masterBath.volts, guestBath.volts);
+    char tweetMsg[34+1];  // longest text is 34 characters
+    sprintf_P(tweetMsg, PSTR("Leak Detector: Master Bath = %d mV"), masterBath.volts, guestBath.volts);
+    SendTweet(tweetMsg);
+    sprintf_P(tweetMsg, PSTR("Leak Detector: Guest Bath = %d mV"), guestBath.volts, guestBath.volts);
     SendTweet(tweetMsg);
     
     weeklyHeartbeatTimer =  millis() + (MINUTE * 60UL * 24UL * 7UL); // add 1 week to heartbeat timer
+
     #ifdef PRINT_DEBUG
       PrintStates();
     #endif
   }  // end weekly heartbeat
 
-  
   // Check time once every 2 days and adjust Sunday countdown
   if( (long)( millis() -  checkNtpTimer) > 0 )
   {
-    delay(10000);  // don't want to query NPT time too frequently
     uint8_t ntpRefresh[6];
     
     if( getTime(ntpRefresh) )
     {  
-      checkNtpTimer = millis() + (MINUTE * 60UL * 48UL);  // add 48 hours to check time timer
+      checkNtpTimer = millis() + (MINUTE * 60UL * 48UL);  // add 48 hours to check NPT timer
       weeklyHeartbeatTimer = millis() + getMsUntilSundayNoon(ntpRefresh); 
     } // Update weekly countdown timer with mS until Sunday noon
     else
     {  
-      SendTweet("Failed to update NTP time. ");  // Failer to get time from server, send tweet about NTP failure
-      checkNtpTimer = millis() + MINUTE;  // try again in 1 minute
+//      SendTweet("Failed to update NTP time");  // Failer to get time from server, send tweet about NTP failure
+      checkNtpTimer = millis() + (5UL * MINUTE);  // try again in 5 minutes
     } 
   }
-
-  // If anythinbg is wet, turn on LED and relay (they are on the same output
+  
+  // If anything is wet, turn on LED and relay (they are on the same output
   bool wetOutputState = LOW;
   for(int i = 0; i < NUMWIREDINPUTS + NUMTRANSMITTERS; i++)
   {
@@ -225,19 +253,20 @@ void loop ()
     { wetOutputState = HIGH; }
   }    
   digitalWrite(ISWETOUTPUT, wetOutputState);  // turn on Red LED and Relay if anything is wet
-
+  
 }  // end loop()
 
 
-//===========================================================================================================================
+//=========================================================================================================================
 // Check inputs to see if any sponges are wet
-//===========================================================================================================================
+//=========================================================================================================================
 void ProcessSensors()
 {
-  char tweetMsg[100];
+  char twitterMsg[31+1];  // max message is 31 char
+  isAnythingWet = false;  // reset flag
   
-  // When sensor is dry, input is LOW
-  for(byte i = 0; i < NUMWIREDINPUTS; i++)
+  // read hard wired inputs
+  for(int i = 0; i < NUMWIREDINPUTS; i++)
   {
     // Read hard wired sensors
     // Loop until two consecutive reading are the same
@@ -250,17 +279,34 @@ void ProcessSensors()
       secondreading = digitalRead(InputPinNum[i]);
     } while (firstreading != secondreading);
     InputState[i] = firstreading;
+    
+    if ( InputState[i] == WET )
+    { isAnythingWet = true; }
   }
   
   // Read Remote Master Bath sensor
   if( ReadRFSensors( &masterBath, ADDRMASTERBATH ) )
   {
+    
+    // If master bath came back online, send a tweet
+    if ( masterTxOfflineMsg == true )
+    {
+      sprintf_P(twitterMsg, PSTR("Master Bath is back online: %dmV. Offline for %lu min"), masterBath.volts, (millis() - masterBathOfflineTime) / 60000UL );
+      SendTweet(twitterMsg);
+    }
+    
+    masterTxOfflineMsg = false; // reset flag for sending Tweeet about wireless sensor being offline
+        
     InputState[NUMWIREDINPUTS] = masterBath.IsWet;
+    if ( masterBath.IsWet == WET )
+    { isAnythingWet = true; }
+
     
     // Check for low volts
     if( masterBath.online == true && masterBath.volts < 2800 && masterBath.lowVoltMsgFlag == false)
     {
-      SendTweet("Low battery Master Bath.  ");
+      sprintf_P(twitterMsg, PSTR("Low battery Master Bath: %dmV"), masterBath.volts );
+      SendTweet(twitterMsg);
       masterBath.lowVoltMsgFlag = true;
     }
     // Reset low volts flag if volts is over 3000 mV
@@ -272,8 +318,8 @@ void ProcessSensors()
     // Check for low temperature in Masster Bath
     if( masterBath.online == true && masterBath.temp <= 40 && masterBath.temp >= 20 && masterBath.lowTempMsgFlag == false )
     {
-      sprintf(tweetMsg, "Low temp Master Bath (%d F).  ", masterBath.temp);
-      SendTweet(tweetMsg);
+      sprintf_P(twitterMsg, PSTR("Low temp Master Bath: %d F"), masterBath.temp);
+      SendTweet(twitterMsg);
       masterBath.lowTempMsgFlag = true;
     }
     // Reset low temp flag if temp is 50 F
@@ -284,18 +330,37 @@ void ProcessSensors()
   }
   else
   {
-    // panStamp in Master bath is offline
+    // If Master bath is offline, send tweet
+    if( masterBath.online == false && masterTxOfflineMsg == false )
+    {
+      strcpy_P(twitterMsg, PSTR("Master Bath is offline"));
+      if( SendTweet(twitterMsg) == 200 )
+      { masterTxOfflineMsg = true; }
+      masterBathOfflineTime = millis(); // Time master bath went offline
+    }
   }
   
   // Read Remote Guest Bath sensor
   if( ReadRFSensors( &guestBath, ADDRGUESTBATH ) )
   {
+    
+    // If guest bath came back online, send a tweet
+    if ( guestTxOfflineMsg == true )
+    {
+      sprintf_P(twitterMsg, PSTR("Guest Bath is back online: %dmV. Offline for %lu min"), guestBath.volts, (millis() - guestBathOfflineTime) / 60000UL );
+      SendTweet(twitterMsg);
+    }
+     guestTxOfflineMsg = false; // reset flag for sending Tweeet about wireless sensor being offline
+   
     InputState[NUMWIREDINPUTS + 1] = guestBath.IsWet;
+    if ( guestBath.IsWet == WET )
+    { isAnythingWet = true; }
     
     // Check for low volts
     if(guestBath.online == true &&  guestBath.volts < 2800 && guestBath.lowVoltMsgFlag == false)
-    {
-      SendTweet("Low battery in Guest Bath.  ");
+    { 
+      sprintf_P(twitterMsg, PSTR("Low battery Guest Bath: %dmV"), guestBath.volts );
+      SendTweet(twitterMsg);
       guestBath.lowVoltMsgFlag = true;
     }
     // Reset low volts flag if volts is over 3000 mV
@@ -307,8 +372,8 @@ void ProcessSensors()
     // Check for low temperature in Guest Bath
     if(guestBath.online == true &&  guestBath.temp <= 40 && guestBath.temp >= 20 && guestBath.lowTempMsgFlag == false)
     {
-      sprintf(tweetMsg, "Low temp in Guest Bath (%d F).  ", guestBath.temp);
-      SendTweet(tweetMsg);
+      sprintf_P(twitterMsg, PSTR("Low temp in Guest Bath: %d F"), guestBath.temp);
+      SendTweet(twitterMsg);
       guestBath.lowTempMsgFlag = true;
     }
     // Reset low temp flag if temp is 50 F
@@ -318,8 +383,15 @@ void ProcessSensors()
     }
   }
   else
-  {
-    // panStamp in Guest bath is offline
+  { 
+    // In Guest bath is offline, send tweet
+    if( guestBath.online == false && guestTxOfflineMsg == false )
+    {
+      strcpy_P(twitterMsg, PSTR("Guest Bath is offline"));
+      if( SendTweet(twitterMsg) == 200 )
+      { guestTxOfflineMsg = true; }
+      guestBathOfflineTime = millis(); // Time guest bath went offline
+    }
   }
   
   // See if any inputs have gone from Dry to Wet
@@ -333,10 +405,9 @@ void ProcessSensors()
       
       isWet[i] = WET;
       
-      // One of the inputs went from Dry to Wet
-      printf_P(PSTR("Water detected ID: %d\n\r"), i);
-
       #ifdef PRINT_DEBUG
+        Serial.print(F("Water detected ID: "));
+        Serial.println(i);
         PrintStates();
       #endif
       
@@ -353,7 +424,10 @@ void ProcessSensors()
     {
       WaterDetect[i] = WET;  // Sponge is still wet after delay
       SendAlert(i , WET);    // One of the inputs is still wet after DOUBLE_CHECK_DELAY.  Send Tweet out
-    }
+      #ifdef PRINT_DEBUG
+        PrintStates();
+      #endif
+     }
   } // End double check for wet sponge
   
   
@@ -362,14 +436,9 @@ void ProcessSensors()
   for(int i = 0; i < NUMWIREDINPUTS + NUMTRANSMITTERS; i++)
   {
     if(InputState[i] == DRY)
-    {
-      isWet[i] = DRY;
-    }
+    { isWet[i] = DRY; }
     else
-    {
-      // If input is WET, reset drying delay
-      WetToDryDelay[i] = millis() + DRYING_DELAY;
-    }
+    { WetToDryDelay[i] = millis() + DRYING_DELAY; } // If input is WET, reset drying delay
   }
   
   // Check for dried out sponge, after long delay
@@ -391,14 +460,13 @@ void ProcessSensors()
 } // ProcessSensors()
 
 
-//===========================================================================================================================
+//=========================================================================================================================
 // Get the panStamp data
 // I2C will deliver all the panStamp data to panStampData[], but this function only
 // returns data for one panStamp at a time
-//===========================================================================================================================
+//=========================================================================================================================
 bool ReadRFSensors(RemoteSensorData_t* rfsensor, byte panStampID)
 {
-  
   int voltCalibration[3]; // voltage calibration, millivolt adjustment.  Use [3] elements because panStamp IDs are 1 and 2, there is no zero
   voltCalibration[ADDRMASTERBATH] = -71;
   voltCalibration[ADDRGUESTBATH] =  -40;
@@ -427,8 +495,6 @@ bool ReadRFSensors(RemoteSensorData_t* rfsensor, byte panStampID)
       case ADDRGUESTBATH:
         byteOffset = PACKETSPERPANSTAMP;
         break;
-      default:
-        printf_P(PSTR("Invalid panStampID=%d\n"), panStampID );
     }
     
     // If panStamp Tx is online, calculate sensor values and return in rfsensor
@@ -444,12 +510,12 @@ bool ReadRFSensors(RemoteSensorData_t* rfsensor, byte panStampID)
       if(millivolts < 0)
       { millivolts = 0;}
       
-      // Calculate temperature from TMP36
-      // Note: sinse reference voltage will change with the battery voltage, we need to
-      // take this into account
+      // Get temperature 
       int localTemp;
       localTemp  = panStampData[3 + byteOffset] << 8;
       localTemp |= panStampData[4 + byteOffset];
+      if(localTemp > 100 || localTemp < 0 )
+      { localTemp = 0;} // check for bad data
       
       // Put panStamp data into rfsensor structure, only returns data for one panStamp
       // even though panStampData[] has data for all transmistters
@@ -477,75 +543,75 @@ bool ReadRFSensors(RemoteSensorData_t* rfsensor, byte panStampID)
 } // ReadRFSensors()
 
 
-//===========================================================================================================================
+//=========================================================================================================================
 // Based on which sensor went off, and it it changed from dry to wet, or wet to dry, create message for Twitter
-//===========================================================================================================================
+//=========================================================================================================================
 void SendAlert(byte SensorArrayPosition, bool IsWet)
 {
   
-  char alertMsg[75];
+  char alertMsg[17+26+1]; // longest text is 26 characters, add space for time stamp
   if(IsWet == WET)
-  {strcpy(alertMsg, "Water Detected - "); }  // 25 characters
+  {strcpy_P(alertMsg, PSTR("Water Detected - ")); }  // 17 characters
   else
-  {strcpy(alertMsg, "Water Dried Up - "); }
+  {strcpy_P(alertMsg, PSTR("Water Dried Up - ")); }
   
   switch(SensorArrayPosition)
   {
     case 0:
-      strcat(alertMsg, "First Fl bathroom sink. ");
+      strcat_P(alertMsg, PSTR("First Fl bathroom sink"));
       break;
     case 1:
-      strcat(alertMsg, "Washing machine. ");
+      strcat_P(alertMsg, PSTR("Washing machine"));
       break;
     case 2:
-      strcat(alertMsg, "TBD1. ");
+      strcat_P(alertMsg, PSTR("TBD1"));
       break;
     case 3:
-      strcat(alertMsg, "TBD2. ");
+      strcat_P(alertMsg, PSTR("TBD2"));
       break;
     case 4:
-      strcat(alertMsg, "Water Heater. ");
+      strcat_P(alertMsg, PSTR("Water Heater"));
       break;
     case 5:
-      strcat(alertMsg, "Boiler. ");
+      strcat_P(alertMsg, PSTR("Boiler"));
       break;
     case 6:
-      strcat(alertMsg, "Frig. ");
+      strcat_P(alertMsg, PSTR("Frig"));
       break;
     case 7:
-      strcat(alertMsg, "Dishwasher. ");
+      strcat_P(alertMsg, PSTR("Dishwasher"));
       break;
     case 8:
-      strcat(alertMsg, "Kitchen Sink. ");
+      strcat_P(alertMsg, PSTR("Kitchen Sink"));
       break;
     case 9:
-      strcat(alertMsg, "Hot Tub Pump/Filter. ");
+      strcat_P(alertMsg, PSTR("Hot Tub Pump/Filter"));
       break;
     case 10:
-      strcat(alertMsg, "Behind Hot tub. ");
+      strcat_P(alertMsg, PSTR("Behind Hot tub"));
       break;
     case 11:
-      strcat(alertMsg, "Water Tank. ");
+      strcat_P(alertMsg, PSTR("Water Tank"));
       break;
     case NUMWIREDINPUTS:  // Master Bath
-      strcat(alertMsg, "Master Bath Sink. ");
+      strcat_P(alertMsg, PSTR("Master Bath Sink"));
       break;
     case NUMWIREDINPUTS + 1:  // Guest Bath
-      strcat(alertMsg, "2nd Fl Guest Bathroom Sink.   ");  // longest text - 28 char
+      strcat_P(alertMsg, PSTR("2nd Fl Guest Bathroom Sink"));  // longest text - 26 char
       break;
   }
   
   SendTweet(alertMsg);  // Send message to Twitter
   
-} // CreateTweet ()
+} // SendAlert ()
 
 
-//======================================================================================
+//=========================================================================================================================
 // Send twitter text, appends the time to the message to avoid twitter blocking duplicate messages
 // Example usage:
 //    strcpy(msgTweet, "Water leak by washing machine");
 //    SendTweet(msgTweet);
-//======================================================================================
+//=========================================================================================================================
 int SendTweet(char msgTweet[])
 {
   
@@ -559,31 +625,26 @@ int SendTweet(char msgTweet[])
   if(TweetCounter > 50)
   { return 0; }  // exit function
   
-  char tweetAndTime[strlen(msgTweet) + 14];  // set char array so it can hold message and timestamp
+  char tweetAndTime[strlen(msgTweet) + 12];  // set char array so it can hold message and timestamp
   strcpy(tweetAndTime, msgTweet);            // copy twitter message into bigger character array
   
   // Get time from NTP Time server and append to twitter message.  This avoids duplicate tweets which may not get sent
   uint8_t getServerTime[6];
-  char timebuf[13];  // char array to hold formatted time
+  char timebuf[11];  // char array to hold formatted time
   if(getTime(getServerTime))
   {
     if(getServerTime[4] == 1)
-    { sprintf(timebuf, "%d:%02d AM", getServerTime[1], getServerTime[2]); }
+    { sprintf(timebuf, "  %d:%02d AM", getServerTime[1], getServerTime[2]); }
     else
-    { sprintf(timebuf, "%d:%02d PM", getServerTime[1], getServerTime[2]); }
+    { sprintf(timebuf, "  %d:%02d PM", getServerTime[1], getServerTime[2]); }
     
     strcat(tweetAndTime, timebuf);  // add timestamp to twiiter message
   }
-  else  // Couldn't get time from NTP server, append millis() to tweet
-  {
-    strcat(tweetAndTime, ltoa(millis(),  timebuf, 10) );
-  }
-  
   
   delay(500);  // Thought it would be good to have a short delay after getting the time and before sending a Tweet
   
 #ifdef PRINT_DEBUG
-  Serial.print("Tweet: ");
+  Serial.print(F("Tweet: "));
   Serial.println(tweetAndTime);  // Print Tweet to serial monitor
   Serial.println();
 #endif
@@ -619,21 +680,21 @@ int SendTweet(char msgTweet[])
 } // SendTweet()
 
 
-//======================================================================================
+//=========================================================================================================================
 // Print states of all the sensors - remove when debugging isn't needed
-//======================================================================================
+//=========================================================================================================================
 void PrintStates()
 {
   int totalInputs = NUMWIREDINPUTS + NUMTRANSMITTERS;
   
-  printf_P(PSTR("\nInputState\t"));
+  Serial.print(F("\nInputState\t"));
   for(int i = 0; i < totalInputs; i++)
   {
     Serial.print(InputState[i]);
     Serial.print("\t");
   }
   Serial.println();
-  printf_P(PSTR("WetFlag    \t"));
+  Serial.print(F("WetFlag    \t"));
   for(int i = 0; i < totalInputs; i++)
   {
     Serial.print(isWet[i]);
@@ -641,7 +702,7 @@ void PrintStates()
   }
   Serial.println();
   
-  printf_P(PSTR("WaterDetect\t"));
+  Serial.print(F("WaterDetect\t"));
   for(int i = 0; i < totalInputs; i++)
   {
     Serial.print(WaterDetect[i]);
@@ -653,16 +714,16 @@ void PrintStates()
   {
     Serial.println(F("\t\tIsWet\tTemp\tVolts"));
     Serial.print(F("Master Bath"));
-    Serial.print(F("\t"));
+    Serial.print("\t");
     Serial.print(masterBath.IsWet);
-    Serial.print(F("\t"));
+    Serial.print("\t");
     Serial.print(masterBath.temp);
-    Serial.print(F("\t"));
+    Serial.print("\t");
     Serial.println(masterBath.volts);
   }
   else
   {
-    Serial.println(F("Master Bath panStamp is offline"));
+    Serial.println(F("Master Bath is offline"));
   }
   
   if(guestBath.online)
@@ -677,14 +738,110 @@ void PrintStates()
   }
   else
   {
-    Serial.println(F("Guest Bath panStamp is offline"));
+    Serial.println(F("Guest Bath is offline"));
   }
 
 } // End PrintStates()
 
 
+//=========================================================================================================================
+// Update the OLED display showing any wet inputs
+// There is no "sponge debounce" like with the twitter alers
+// this shows the real-time high-low status of the inputs
+//=========================================================================================================================
+void updateOledDisplay()
+{ 
+  const int dispDelay = 1000;
+  
+  display.clearDisplay();   
+  display.setTextSize(1);
+  
+  if (isAnythingWet == false )
+  {
+    display.setCursor(0,10);
+    display.println("EVERYTHING IS DRY");
+    display.display();
+    return;  // Exit function
+  }
+  
+  // At least one sponge is Wet, cycle through them all
+  for(int i = 0; i < NUMWIREDINPUTS + NUMTRANSMITTERS; i++)
+  {
+    if ( InputState[i] == WET )         
+    {
+      display.clearDisplay();   
+      display.setCursor(0,10);
+      switch(i)
+      {
+        case 0: 
+          display.println("1ST FL BATH SINK");
+          break;
+        case 1: 
+          display.println("WASHING MACHINE");
+          break;
+        case 2: 
+          display.println("TBD1");
+          break;
+        case 3: 
+          display.println("TBD2");
+          break;
+        case 4: 
+          display.println("WATER HEATER");
+          break;
+        case 5: 
+          display.println("BOILER");
+          break;
+        case 6: 
+          display.println("FRIG");
+          break;
+        case 7: 
+          display.println("DISH WASHER");
+          break;
+        case 8: 
+          display.println("KITCHEN SINK");
+          break;
+        case 9: 
+          display.println("HOT TUB FILTER");
+          break;
+        case 10: 
+          display.println("HOT TUB REAR");
+          break;
+        case 11: 
+          display.println("WATER TANK");
+          break;
+        case NUMWIREDINPUTS: 
+          display.println("MASTER BATH");
+          break;
+        case NUMWIREDINPUTS + 1: 
+          display.println("GUEST BATH");
+          break;   
+      }  // switch()
+      display.setCursor(0,20);
+      display.println("IS WET");
+      display.display();
+      delay(dispDelay);
+    } // something is wet
+  } // end for loop
+  
+  if( masterBath.online == false)
+  {
+    display.clearDisplay();    
+    display.setCursor(0,10);
+    display.println("MASTER BATH OFFLINE");
+    display.display();
+    delay(dispDelay);
+  }
+  if( guestBath.online == false)
+  {
+    display.clearDisplay();    
+    display.setCursor(0,10);
+    display.println("GUEST BATH OFFLINE");
+    display.display();
+    delay(dispDelay);
+  }
+}  // updateOledDisplay()
 
-//================================================================================================================================================================================
+//=========================================================================================================================
 // Returns mS until noon on next Sunday
 // Used for weekly heartbeat
 // ntpTime Array
@@ -694,10 +851,9 @@ void PrintStates()
 // 3 - second
 // 4 - 1 for AM, 2 for PM
 // 5 - day of week.  0=Sunday
-//================================================================================================================================================================================
+//=========================================================================================================================
 uint32_t getMsUntilSundayNoon(uint8_t *ntpTime)
 {
-
   uint32_t mStoMidnight; // mS from now to midnight
   mStoMidnight =  (24 - (ntpTime[0] + 1)) * 3600000UL;  // convert hours left in the day to mS
   mStoMidnight += (60 - (ntpTime[2] + 1)) * 60000UL;    // add minutes left in current hour to mS
@@ -708,29 +864,7 @@ uint32_t getMsUntilSundayNoon(uint8_t *ntpTime)
   
   // 43200000 = mS in 12 hours - this moves time from midnight to noon on Sunday
   return ((daysToSunday * 86400000UL) + mStoMidnight + 43200000UL);
-  
 } // getMsUntilSundayNoon()
-
-
-//========================================================================================
-// printf_P(PSTR()) stores the string in Program Memory (Flash)
-// http://www.nerdkits.com/videos/printf_and_scanf/
-//========================================================================================
-void printf_begin(void)
-{
-  // fdevopen() is provided to associate a stream to a device.
-  fdevopen( &serial_putc, 0 );
-} // End printf_begin()
-
-
-//========================================================================================
-// Called by printf_begin()
-//========================================================================================
-int serial_putc(char c, FILE *)
-{
-  Serial.write( c );
-  return c;
-}  // End serial_putc()
 
 
 //=========================================================================================================================
@@ -757,8 +891,8 @@ bool setupNTPTime()
 
 
 //============================================================
-// Get the time from NTP server
-// If it doesn't get time from first NTP server, sketch will a second server
+// Get the time from NPT server
+// try up to 3 NPT servers
 //============================================================
 bool getTime(uint8_t *ntpTime)
 {
@@ -833,7 +967,7 @@ void parseTimePacket(uint8_t *ntpTime)
   unsigned long epoch = secsSince1900 - seventyYears;
   
   // Adjust for time zone
-  const int estOffset = 4;
+  const int estOffset = 5;
   epoch -= (estOffset * 3600);
   
   // get the hour, minute and second:
@@ -897,6 +1031,9 @@ unsigned long sendNTPpacket(IPAddress& address)
 } // sendNTPpacket()
 
 
+//=========================================================================================================================
+// Print amount of free RAM
+//=========================================================================================================================
 int freeRam(bool PrintRam)
 {
   int freeSRAM;

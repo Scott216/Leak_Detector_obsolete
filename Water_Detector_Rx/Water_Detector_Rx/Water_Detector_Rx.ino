@@ -65,7 +65,7 @@ const byte addrMasterBath =     1;  // panStamp device address for 2nd floor mas
 const byte addrGuestBath =      2;  // panStamp device address for 2nd floor guest bath
 const byte numTransmitters =    2;  // number of panStamp transmitters on this network
 const byte panStampOffline =  255;  // Send this to I2C master in the panStamp Rx address to indicate panStamp is offline
-const uint32_t panStampTimeout = 600000; // 10 minute timeout for panStamps.  If no connections in 10 mintues, don't send data to Master
+const uint32_t panStampTimeout = 120000; // 2 minute timeout for panStamps
 
 byte I2C_Packet[numTransmitters *  packetsPerPanStamp];   // Array to hold data sent over I2C to main Arduino
 uint32_t lastRxSuccess[3];        // miliseconds since last successful receipt of panStamp data.  Arrary starrts at 1
@@ -88,16 +88,6 @@ void wireRequestEvent();
 
 
 //============================================================================
-/*
- 888      888 d8b          888
- 888      888 Y8P          888
- 888      888              888
- 88888b.  888 888 88888b.  888  888  .d88b.  888d888
- 888 "88b 888 888 888 "88b 888 .88P d8P  Y8b 888P"
- 888  888 888 888 888  888 888888K  88888888 888
- 888 d88P 888 888 888  888 888 "88b Y8b.     888
- 88888P"  888 888 888  888 888  888  "Y8888  888
- */
 // Blink LED cnt times
 //============================================================================
 void blinker(int LED, int cnt)
@@ -112,19 +102,6 @@ void blinker(int LED, int cnt)
 }  // blinker()
 
 //================================================================================================================================================================================
-/*
- d888    d888   .d8888b.   d888           d8b                            888          8888888          888                                              888
- d8888   d8888  d88P  Y88b d8888           Y8P                            888            888            888                                              888
- 888     888  888    888   888                                          888            888            888                                              888
- .d8888b .d8888b   888     888  888    888   888  .d8888b  888  .d88b.  88888b.   8888b.  888 .d8888b    888   88888b.  888888 .d88b.  888d888 888d888 888  888 88888b.  888888
- d88P"   d88P"      888     888  888    888   888  88K      888 d88P"88b 888 "88b     "88b 888 88K        888   888 "88b 888   d8P  Y8b 888P"   888P"   888  888 888 "88b 888
- 888     888        888     888  888    888   888  "Y8888b. 888 888  888 888  888 .d888888 888 "Y8888b.   888   888  888 888   88888888 888     888     888  888 888  888 888
- Y88b.   Y88b.      888     888  Y88b  d88P   888       X88 888 Y88b 888 888  888 888  888 888      X88   888   888  888 Y88b. Y8b.     888     888     Y88b 888 888 d88P Y88b.
- "Y8888P "Y8888P 8888888 8888888 "Y8888P"  8888888 88888P' 888  "Y88888 888  888 "Y888888 888  88888P' 8888888 888  888  "Y888 "Y8888  888     888      "Y88888 88888P"   "Y888
- 888                                                                                         888
- Y8b d88P                                                                                         888
- "Y88P"                                                                                          888
- */
 // Handle interrupt from CC1101 (INT 0)
 //================================================================================================================================================================================
 void cc1101signalsInterrupt(void)
@@ -134,19 +111,6 @@ void cc1101signalsInterrupt(void)
 } // cc1101signalsInterrupt()
 
 //============================================================================
-/*                888
- 888
- 888
- .d8888b   .d88b.  888888 888  888 88888b.
- 88K      d8P  Y8b 888    888  888 888 "88b
- "Y8888b. 88888888 888    888  888 888  888
- X88 Y8b.     Y88b.  Y88b 888 888 d88P
- 88888P'  "Y8888   "Y888  "Y88888 88888P"
- 888
- 888
- 888
-
- http://patorjk.com/software/taag/#p=display&f=Colossal&t=setup  */
 //============================================================================
 void setup()
 {
@@ -183,19 +147,6 @@ void setup()
 }  // setup()
 
 //============================================================================
-/*
- 888
- 888
- 888
- 888  .d88b.   .d88b.  88888b.
- 888 d88""88b d88""88b 888 "88b
- 888 888  888 888  888 888  888
- 888 Y88..88P Y88..88P 888 d88P
- 888  "Y88P"   "Y88P"  88888P"
- 888
- 888
- 888
- */
 // Get data from panStamps and put into I2C packet.
 // When Master requests data from this slave, the wireRequestEvent() will
 // execute and send the data to the other Arduiino
@@ -261,19 +212,6 @@ void loop()
 
 
 //========================================================================================================================================
-/*
- d8b                 8888888b.                                              888    8888888888                           888
- Y8P                 888   Y88b                                             888    888                                  888
- 888    888                                             888    888                                  888
- 888  888  888 888 888d888 .d88b.  888   d88P .d88b.   .d88888 888  888  .d88b.  .d8888b  888888 8888888   888  888  .d88b.  88888b.  888888
- 888  888  888 888 888P"  d8P  Y8b 8888888P" d8P  Y8b d88" 888 888  888 d8P  Y8b 88K      888    888       888  888 d8P  Y8b 888 "88b 888
- 888  888  888 888 888    88888888 888 T88b  88888888 888  888 888  888 88888888 "Y8888b. 888    888       Y88  88P 88888888 888  888 888
- Y88b 888 d88P 888 888    Y8b.     888  T88b Y8b.     Y88b 888 Y88b 888 Y8b.          X88 Y88b.  888        Y8bd8P  Y8b.     888  888 Y88b.
- "Y8888888P"  888 888     "Y8888  888   T88b "Y8888   "Y88888  "Y88888  "Y8888   88888P'  "Y888 8888888888  Y88P    "Y8888  888  888  "Y888
- 888
- 888
- 888
- */
 // function that executes whenever data is requested by master
 // this function is registered as an event in setup()
 // It sends a 14 byte packet that has data from both panStamps
@@ -282,7 +220,7 @@ void loop()
 void wireRequestEvent()
 {
 
-  // If sketch hasn't received any data from the panStamp in a while then
+  // If we haven't received any data from the panStamp in a while then
   // set the panStamp Tx byte to indicate it's offline by setting it to 255
   if ((long)( millis() - lastRxSuccess[1]) > panStampTimeout )    // Master Bath
   {
@@ -302,19 +240,6 @@ void wireRequestEvent()
 
 
 //=============================================================================================================================================
-/*
- d8b          888                                .d8888b.  888                                     .d8888b.                     .d888 d8b
- Y8P          888                               d88P  Y88b 888                                    d88P  Y88b                   d88P"  Y8P
- 888                               Y88b.      888                                    888    888                   888
- 88888b.  888d888 888 88888b.  888888 88888b.   8888b.  88888b.   "Y888b.   888888  8888b.  88888b.d88b.  88888b.  888         .d88b.  88888b.  888888 888  .d88b.
- 888 "88b 888P"   888 888 "88b 888    888 "88b     "88b 888 "88b     "Y88b. 888        "88b 888 "888 "88b 888 "88b 888        d88""88b 888 "88b 888    888 d88P"88b
- 888  888 888     888 888  888 888    888  888 .d888888 888  888       "888 888    .d888888 888  888  888 888  888 888    888 888  888 888  888 888    888 888  888
- 888 d88P 888     888 888  888 Y88b.  888 d88P 888  888 888  888 Y88b  d88P Y88b.  888  888 888  888  888 888 d88P Y88b  d88P Y88..88P 888  888 888    888 Y88b 888
- 88888P"  888     888 888  888  "Y888 88888P"  "Y888888 888  888  "Y8888P"   "Y888 "Y888888 888  888  888 88888P"   "Y8888P"   "Y88P"  888  888 888    888  "Y88888
- 888                                  888                                                                 888                                                   888
- 888                                  888                                                                 888                                              Y8b d88P
- 888                                  888                                                                 888                                               "Y88P"
- */
 // Print panStamp config info: Frequence, Channel, Network address, Rx address
 //=============================================================================================================================================
 void printpanStampConfig()
@@ -336,21 +261,6 @@ void printpanStampConfig()
 }  // printpanStampConfig()
 
 //=============================================================================================================================================
-/*
-
-
- d8b          888    .d8888b.                                              888     888         888
- Y8P          888   d88P  Y88b                                             888     888         888
- 888   Y88b.                                                  888     888         888
- 88888b.  888d888 888 88888b.  888888 "Y888b.    .d88b.  88888b.  .d8888b   .d88b.  888d888 Y88b   d88P 8888b.  888 888  888  .d88b.  .d8888b
- 888 "88b 888P"   888 888 "88b 888       "Y88b. d8P  Y8b 888 "88b 88K      d88""88b 888P"    Y88b d88P     "88b 888 888  888 d8P  Y8b 88K
- 888  888 888     888 888  888 888         "888 88888888 888  888 "Y8888b. 888  888 888       Y88o88P  .d888888 888 888  888 88888888 "Y8888b.
- 888 d88P 888     888 888  888 Y88b. Y88b  d88P Y8b.     888  888      X88 Y88..88P 888        Y888P   888  888 888 Y88b 888 Y8b.          X88
- 88888P"  888     888 888  888  "Y888 "Y8888P"   "Y8888  888  888  88888P'  "Y88P"  888         Y8P    "Y888888 888  "Y88888  "Y8888   88888P'
- 888
- 888
- 888
- */
 //  Convert data from panStamp Tx and print - for debugging
 //=============================================================================================================================================
 void printSensorValues()
