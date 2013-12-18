@@ -1,5 +1,6 @@
 // See Readme.txt file
 // directory cd Dropbox/Arduino/Water_Detector/ 
+// Uses Leonardo
 
 #include "Arduino.h"
 #include <SPI.h>           // Allows you to communicate with SPI devices. See: http://arduino.cc/en/Reference/SPI
@@ -262,7 +263,7 @@ void loop ()
 //=========================================================================================================================
 void ProcessSensors()
 {
-  char twitterMsg[31+1];  // max message is 31 char
+  char twitterMsg[60];  // max message is 31 char
   isAnythingWet = false;  // reset flag
   
   // read hard wired inputs
@@ -291,10 +292,10 @@ void ProcessSensors()
     // If master bath came back online, send a tweet
     if ( masterTxOfflineMsg == true )
     {
-      sprintf_P(twitterMsg, PSTR("Master Bath is back online: %dmV. Offline for %lu min"), masterBath.volts, (millis() - masterBathOfflineTime) / 60000UL );
+      sprintf_P(twitterMsg, PSTR("Master Bath is back online: %dmV. Offline for %lu sec"), masterBath.volts, (millis() - masterBathOfflineTime) / 1000UL );
       SendTweet(twitterMsg);
     }
-    
+
     masterTxOfflineMsg = false; // reset flag for sending Tweeet about wireless sensor being offline
         
     InputState[NUMWIREDINPUTS] = masterBath.IsWet;
@@ -347,7 +348,7 @@ void ProcessSensors()
     // If guest bath came back online, send a tweet
     if ( guestTxOfflineMsg == true )
     {
-      sprintf_P(twitterMsg, PSTR("Guest Bath is back online: %dmV. Offline for %lu min"), guestBath.volts, (millis() - guestBathOfflineTime) / 60000UL );
+      sprintf_P(twitterMsg, PSTR("Guest Bath is back online: %dmV. Offline for %lu sec"), guestBath.volts, (millis() - guestBathOfflineTime) / 1000UL );
       SendTweet(twitterMsg);
     }
      guestTxOfflineMsg = false; // reset flag for sending Tweeet about wireless sensor being offline
