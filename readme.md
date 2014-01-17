@@ -9,7 +9,8 @@ Use a MCP6004 Op Amp. Need the Op-amp because the impedance of the sponge is hig
 
 Main board leak detector BOM
 
-    1x [OKW Enclosure B6504112](http://www.okwenclosures.com/products/okw/railtec-b.htm) Realtec 105 $9.77. PCB Board 3.87" x 3.22", position screw terminal holes 0.27" from edge
+    1x [OKW Enclosure B6504112](http://www.okwenclosures.com/products/okw/railtec-b.htm) Realtec 105 $9.77. 
+        PCB Board specs 3.87" x 3.22". position screw terminal holes 0.27" from edge
         2x M2.5 x 6mm Screws to mount PCB to OKW Enclosure
         2x 18 position plug header, PCB Side CTB9358/18AO $2.14
         2x 18 Position screw terminal CTB9208/18 $5.84 
@@ -25,7 +26,7 @@ Main board leak detector BOM
     1x OLED 128 x 32 I2C Display, Adafruit 931
     1x Reed Relay, Hamlin HE751A0510, Digikey HE124-ND
     3x MCP6004 Op amp Digikey MCP6004-I/P-ND
-    3x Resistor network 1MΩ Bourns P/N 4606X-101-105LF, Digikey 4606X-1-105LF-ND. (Will need to cut off lead on pin 6)
+    3x Resistor network 1MΩ Bourns P/N 4606X-101-105LF, Digikey 4606X-1-105LF-ND. (cut off lead on pin 6)
     2x 330Ω 1/4 watt resistors
     2x 4.7kΩ 1/4 watt resistors
     2x 68Ω 1/4 watt resistors
