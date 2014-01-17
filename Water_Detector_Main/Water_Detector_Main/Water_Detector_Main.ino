@@ -3,15 +3,15 @@
 // Uses Leonardo
 
 #include "Arduino.h"
-#include <SPI.h>           // Allows you to communicate with SPI devices. See: http://arduino.cc/en/Reference/SPI
-#include <Ethernet.h>      // http://arduino.cc/en/Reference/Ethernet
-#include <Twitter.h>       // http://arduino.cc/playground/Code/TwitterLibrary
-#include <I2C.h>           // http://github.com/rambo/I2C
-#include <Tokens.h>        // Contains Twitter token
-#include <Adafruit_GFX.h>   // http://github.com/adafruit/Adafruit-GFX-Library
+#include <SPI.h>             // Allows you to communicate with SPI devices. See: http://arduino.cc/en/Reference/SPI
+#include <Ethernet.h>        // http://arduino.cc/en/Reference/Ethernet
+#include <Twitter.h>         // http://arduino.cc/playground/Code/TwitterLibrary
+#include <I2C.h>             // http://github.com/rambo/I2C
+#include <Tokens.h>          // Contains Twitter token
+#include <Adafruit_GFX.h>    // http://github.com/adafruit/Adafruit-GFX-Library
 #include <SSD1306_I2C_DSS.h> // For OLED  https://github.com/Scott216/SSD1306_I2C_DSS
-#include "LocalLibrary.h"  // Include application, user and local libraries
-#include <avr/pgmspace.h>
+#include "LocalLibrary.h"    // Include application, user and local libraries
+#include <avr/pgmspace.h>    // Store data in flash.  http://arduino.cc/en/Reference/PROGMEM
 
 // #define CRESTVIEW     // Comment this out when in Vermont
 // #define PRINT_DEBUG      // Comment this out to turn off verbose printing
@@ -133,7 +133,7 @@ void setup ()
   // Initialize I2C communication
   I2c.begin();
   I2c.timeOut(30000);  // set I2C timeout to 30 seconds
-  I2c.pullup(0);       // disable internal pullup resistors on I2C pins, don't want to pull-up to 5volts because of panStamp
+  I2c.pullup(0);       // disable internal pullup resistors on I2C pins, don't want to pull-up to 5 volts because of panStamp
 
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3C (for the 128x32)
   display.clearDisplay();   // clears the screen and buffer
