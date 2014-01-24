@@ -1,10 +1,11 @@
 To Do:
 Take out Tweet counter if no problems after a few months
 Consider replacing Twitter with Tropo.com SMS service
-Put Remote sensors in a class or namespace
+Put sensors in a class.  One class for sensors, then a wired subclass and wireless subclass
 Figure out how to set time when you can't connect to NTP server
 Update V3 on PCB so ISCP pins can come out of bottom of Leonardo
 If remote sensors come online after being offline, send a tweet that it's online. With it send hours it was down and battery volts
+
 
 ====================
 

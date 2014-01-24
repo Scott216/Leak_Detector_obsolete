@@ -10,7 +10,7 @@
 #include <Tokens.h>          // Contains Twitter token
 #include <Adafruit_GFX.h>    // http://github.com/adafruit/Adafruit-GFX-Library
 #include <SSD1306_I2C_DSS.h> // For OLED  https://github.com/Scott216/SSD1306_I2C_DSS
-#include "LocalLibrary.h"    // Include application, user and local libraries
+#include "Water_Detector_Main_Library.h"    // Include application, user and local libraries
 #include <avr/pgmspace.h>    // Store data in flash.  http://arduino.cc/en/Reference/PROGMEM
 
 // #define CRESTVIEW     // Comment this out when in Vermont
