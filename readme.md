@@ -9,7 +9,7 @@ Use a MCP6004 Op Amp. Need the Op-amp because the impedance of the sponge is hig
 
 Main board leak detector BOM
 
-    1x [OKW Enclosure B6504112](http://www.okwenclosures.com/products/okw/railtec-b.htm) Realtec 105 $9.77. 
+    1x OKW Enclosure B6504112 $9.77
         PCB Board specs 3.87" x 3.22". position screw terminal holes 0.27" from edge
         2x M2.5 x 6mm Screws to mount PCB to OKW Enclosure
         2x 18 position plug header, PCB Side CTB9358/18AO $2.14
