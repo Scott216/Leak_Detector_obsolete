@@ -14,9 +14,9 @@ Main board leak detector BOM
         2x M2.5 x 6mm Screws to mount PCB to OKW Enclosure
         2x 18 position plug header, PCB Side CTB9358/18AO $2.14
         2x 18 Position screw terminal CTB9208/18 $5.84 
-    1x Arduino [Leonardo](http://arduino.cc/en/Main/arduinoBoardLeonardo) - without headers
-    1x [Ethernet Shield](http://arduino.cc/en/Main/ArduinoEthernetShield)
-    1x [panStamp](http://www.panstamp.com/products/wirelessarduino)
+    1x Arduino Leonardo - without headers
+    1x Ethernet Shield]
+    1x panStamp - http://www.panstamp.com/products/wirelessarduino
     1x JST PH 5-position header P/N B5B-PH-K-S, Digikey 455-1707-ND for OLED Display, (JST Data Sheet)
     1x JST PH 5-wire cable Sparkfun PRT-09917, JST # PHR-5, Crimp pin SPH-002T-P0.5S
     1x JST PH 4-position header P/N B4B-PH-K-S, Digikey 455-1706-ND for LEDs
