@@ -128,7 +128,6 @@ Adafruit_SSD1306 display(OLED_RESET);
 //=========================================================================================================================
 void setup ()
 {  
-  uint8_t ntpTime[6];
 
   // Initialize I2C communication
   I2c.begin();
@@ -150,6 +149,7 @@ void setup ()
   #endif
   
   // Initialize Ethernet connection and UDP
+  uint8_t ntpTime[6];
   bool EthernetOK = setupNTPTime();
   delay(2000);
   if(EthernetOK)
@@ -753,14 +753,32 @@ void PrintStates()
 void updateOledDisplay()
 { 
   const int dispDelay = 1000;
+  uint8_t ntpTime[6];
+  getTime(ntpTime);
+
   
   display.clearDisplay();   
   display.setTextSize(1);
   
   if (isAnythingWet == false )
   {
+    char timebuf[12];
+    sprintf(timebuf, "%d:%02d ", ntpTime[0], ntpTime[2]);
+    switch ( ntpTime[5] )
+    {
+      case 0: strcat(timebuf, "Sun"); break; 
+      case 1: strcat(timebuf, "Mon"); break; 
+      case 2: strcat(timebuf, "Tue"); break; 
+      case 3: strcat(timebuf, "Wed"); break; 
+      case 4: strcat(timebuf, "Thu"); break; 
+      case 5: strcat(timebuf, "Fri"); break; 
+      case 6: strcat(timebuf, "Sat"); break; 
+    }
+
     display.setCursor(0,10);
     display.println("EVERYTHING IS DRY");
+    display.setCursor(0,20);
+    display.println(timebuf);
     display.display();
     return;  // Exit function
   }
@@ -845,7 +863,7 @@ void updateOledDisplay()
 //=========================================================================================================================
 // Returns mS until noon on next Sunday
 // Used for weekly heartbeat
-// ntpTime Array
+// ntpTime Array:
 // 0 - hour (12 hr format)
 // 1 - hour (24 hr format)
 // 2 - minute
@@ -891,10 +909,18 @@ bool setupNTPTime()
 }  // setupNTPTime()
 
 
-//============================================================
+//========================================================================================================================
 // Get the time from NPT server
 // try up to 3 NPT servers
-//============================================================
+//
+// ntpTime Array
+// 0 - hour (12 hr format)
+// 1 - hour (24 hr format)
+// 2 - minute
+// 3 - second
+// 4 - 1 for AM, 2 for PM
+// 5 - day of week.  0=Sunday
+//========================================================================================================================
 bool getTime(uint8_t *ntpTime)
 {
 
