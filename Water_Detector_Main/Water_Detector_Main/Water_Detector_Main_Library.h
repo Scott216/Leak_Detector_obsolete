@@ -27,4 +27,45 @@ typedef struct {
 #endif // Types_h
 
 
+class WaterSensor
+{
+
+public:
+  bool IsWet();
+  
+protected:
+  
+private:
+  WaterSensor(); // constructor - make private so WaterSensor can't be created by itself, only subclasses allowed
+  ~WaterSensor();
+  bool _IsWet;
+  
+};
+
+
+class Wired : public WaterSensor
+{
+  
+};
+
+class Wireless : public WaterSensor
+{
+public:
+  Wireless(int TransmitterID);  // constructor
+  ~Wireless();
+  int getTemperature();
+  float getVolts();
+  bool isOnline();
+  
+private:
+  int _temperature;
+  float _batteryVolts;
+  bool _isOnline;
+  int _transmitterID;
+  
+};
+
+
+
 #endif
+

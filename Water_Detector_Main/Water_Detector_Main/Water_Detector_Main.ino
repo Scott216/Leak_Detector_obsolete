@@ -58,26 +58,14 @@ const byte ADDRMASTERBATH =     1;  // panStamp device address for 2nd floor mas
 const byte ADDRGUESTBATH =      2;  // panStamp device address for 2nd floor guest bath
 const byte NUMTRANSMITTERS =    2;  // number of panStamp transmitters on this network
 const byte NUMWIREDINPUTS =    12;  // Number of wired water detector inputs
-bool gotI2CPacket =         false;  // Flag to indicate I2C packet came in.  Sketch needs to know when I2C is working so it doesn't process bad data
-uint32_t checkNtpTimer =        0;  // Countdown timer to check NTP time
-bool isAnythingWet =        false;  // flag if any sensors are wet
-bool masterTxOfflineMsg =   false;  // One shot flag when Master Bath transmitter goes offline
-bool guestTxOfflineMsg =    false;  // One shot flag when Guest Bath transmitter goes offline
-uint32_t masterBathOfflineTime;     // Time master bath sensor went offline
-uint32_t guestBathOfflineTime;      // Time guest bath sensor went offline
+bool isAnythingWet =        false;  // Flags if anything is wet
 
 #define ADDRSLAVEI2C  21 // I2C Slave address of panStamp Rx
 
 // Use arrays to hold input status.  Total number of inputs are wired plus wireless sensors
 bool     InputState[      NUMWIREDINPUTS + NUMTRANSMITTERS];     // Input reading, HIGH when water is present LOW when it's not
-bool     isWet[           NUMWIREDINPUTS + NUMTRANSMITTERS];     // Used to trigger if an input goes from Dry to Wet.  Trigger will turn on WaterDetectOutput for 10 seconds.
 bool     WaterDetect[     NUMWIREDINPUTS + NUMTRANSMITTERS];     // Sensor state after delay to make sure it's really wet or dry
-uint32_t DoubleCheckTime[ NUMWIREDINPUTS + NUMTRANSMITTERS];     // Used to wait a few minutes after a sensor is triggered to check the sensor a 2nd time to see if there is still water. Like button debouncing
-uint32_t WetToDryDelay[   NUMWIREDINPUTS + NUMTRANSMITTERS];     // Delay used to let sponge dry out before indicating it's dry
 uint32_t weeklyHeartbeatTimer = 0;                               // mS until Sunday at noon, at which time a tweet will go out to verify sketch is still running  static uint8_t TweetCounter;  // prevent tweets from getting to high
-uint8_t  TweetCounter =         0;                               // prevent tweets from getting to high, stop tweeting after 50 tweets.  Reset every Sunday, same time as heartbeat tweet
-uint32_t CheckSensorsTimer =    0;                               // Timer to check the sensors every second
-uint32_t lastNtpTimeCheck =     0;                               // Last time NPT was checked, don't do within 4 seconds
 
 // Define typedef structurs for panStamp data from remote sensors.  Typedef definition is in LocalLibrary.h
 RemoteSensorData_t masterBath;
@@ -159,7 +147,6 @@ void setup ()
     {
       // Set weekly countdown timer - Sunday noon
       weeklyHeartbeatTimer = millis() + getMsUntilSundayNoon(ntpTime);
-      checkNtpTimer = millis() + (MINUTE * 60UL * 48UL);  // add 48 hours to check time timer
       #ifdef PRINT_DEBUG
         Serial.print(F("hours until Sunday noon = "));
         Serial.println(weeklyHeartbeatTimer / (MINUTE * 60UL));
@@ -176,7 +163,7 @@ void setup ()
   
   for(int i = 0; i < NUMWIREDINPUTS; i++)
   {  pinMode(InputPinNum[i], INPUT); }
-  pinMode(ISWETOUTPUT, OUTPUT);  // turns on red LED and reed relay
+  pinMode(ISWETOUTPUT, OUTPUT);  // Red LED and reed relay
   digitalWrite(ISWETOUTPUT, LOW);
   
   // Initialiaze one shot triggers for messages
@@ -185,7 +172,6 @@ void setup ()
   masterBath.lowTempMsgFlag = false;
   guestBath.lowTempMsgFlag =  false;
 
-  checkNtpTimer = millis() + (MINUTE * 60UL * 48UL);  // Initialize check NPT timer every 48 hours
 
   SendTweet("Leak Detector Restarted");  // Send startup tweet
   
@@ -201,6 +187,9 @@ void setup ()
 //=========================================================================================================================
 void loop ()
 {
+  static uint32_t checkNtpTimer = millis() + (MINUTE * 60UL * 48UL);  // Check NTP time in 48 hours
+  static uint32_t CheckSensorsTimer =    0;                           // Timer to check the sensors every second
+
   if ( (long)(millis() - CheckSensorsTimer) >= 0 )
   {
     display.setCursor(0,0);
@@ -215,7 +204,6 @@ void loop ()
   // Every Sunday at noon send a Tweet to indicate sketch is still running (heartbeat). Send battery voltages
   if( (long)(millis() - weeklyHeartbeatTimer) >= 0 )
   {
-    TweetCounter = 0; // Reset Tweet Counter
     char tweetMsg[34+1];  // longest text is 34 characters
     sprintf_P(tweetMsg, PSTR("Leak Detector: Master Bath = %d mV"), masterBath.volts, guestBath.volts);
     SendTweet(tweetMsg);
@@ -264,6 +252,14 @@ void loop ()
 void ProcessSensors()
 {
   char twitterMsg[60];  // max message is 31 char
+  static bool masterTxOfflineMsg = false;    // One shot flag when Master Bath transmitter goes offline
+  static bool guestTxOfflineMsg =  false;    // One shot flag when Guest Bath transmitter goes offline
+  static uint32_t masterBathOfflineTime = 0; // Time master bath sensor went offline
+  static uint32_t guestBathOfflineTime  = 0;  // Time guest bath sensor went offline
+  static uint32_t DoubleCheckTime[ NUMWIREDINPUTS + NUMTRANSMITTERS];     // Used to wait a few minutes after a sensor is triggered to check the sensor a 2nd time to see if there is still water. Like button debouncing
+  static uint32_t WetToDryDelay[   NUMWIREDINPUTS + NUMTRANSMITTERS];     // Delay used to let sponge dry out before indicating it's dry
+  static bool     isWet[           NUMWIREDINPUTS + NUMTRANSMITTERS];     // Used to trigger if an input goes from Dry to Wet.  Trigger will turn on WaterDetectOutput for 10 seconds.
+
   isAnythingWet = false;  // reset flag
   
   // read hard wired inputs
@@ -468,6 +464,8 @@ void ProcessSensors()
 //=========================================================================================================================
 bool ReadRFSensors(RemoteSensorData_t* rfsensor, byte panStampID)
 {
+  static bool gotI2CPacket = false;  // Flag to indicate I2C packet came in.  Sketch needs to know when I2C is working so it doesn't process bad data
+
   int voltCalibration[3]; // voltage calibration, millivolt adjustment.  Use [3] elements because panStamp IDs are 1 and 2, there is no zero
   voltCalibration[ADDRMASTERBATH] = -71;
   voltCalibration[ADDRGUESTBATH] =  -40;
@@ -615,17 +613,6 @@ void SendAlert(byte SensorArrayPosition, bool IsWet)
 //=========================================================================================================================
 int SendTweet(char msgTweet[])
 {
-  
-  TweetCounter++;  // Increment tweet counter, prevents lots of Tweets going out if something is wrong.  Reset with weekly heartbeat
-  
-  // Limit number of tweets per week to 50.  Counter is set when heartbeat is executed
-  if( TweetCounter == 50 )
-  { strcpy(msgTweet, "50 tweets"); } // This will overwrite tweet message coming in
-  
-  // Too many tweets, exit function
-  if(TweetCounter > 50)
-  { return 0; }  // exit function
-  
   char tweetAndTime[strlen(msgTweet) + 12];  // set char array so it can hold message and timestamp
   strcpy(tweetAndTime, msgTweet);            // copy twitter message into bigger character array
   
@@ -695,14 +682,14 @@ void PrintStates()
     Serial.print("\t");
   }
   Serial.println();
-  Serial.print(F("WetFlag    \t"));
-  for(int i = 0; i < totalInputs; i++)
-  {
-    Serial.print(isWet[i]);
-    Serial.print("\t");
-  }
-  Serial.println();
-  
+//  Serial.print(F("WetFlag    \t"));
+//  for(int i = 0; i < totalInputs; i++)
+//  {
+//    Serial.print(isWet[i]);
+//    Serial.print("\t");
+//  }
+//  Serial.println();
+
   Serial.print(F("WaterDetect\t"));
   for(int i = 0; i < totalInputs; i++)
   {
@@ -923,6 +910,8 @@ bool setupNTPTime()
 //========================================================================================================================
 bool getTime(uint8_t *ntpTime)
 {
+
+  static uint32_t lastNtpTimeCheck =  0;  // Last time NPT was checked, don't do within 4 seconds
 
   // Don't check NPT time again too quickly
   if ((long) (millis() - lastNtpTimeCheck ) < 5000)
