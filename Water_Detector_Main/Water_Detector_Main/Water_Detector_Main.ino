@@ -12,7 +12,8 @@ v2.00 05/28/14 - Changed low temp alarm logic so it only sends low temp tweet if
 v2.01 06/27/14 - Updated tx offline message to display hrs or sec depending on how long it was offline.  Fixed 
                  updateOledDisplay so Tx offline messages would display
 v2.02 07/04/14 - Added checksum to data packet, renamed some constants
- 
+v2.03 07/05/14 - Changed NTP update. It was updating every time you checked sensors and every 48 hours.  Changed to check once a minutes 
+
 */
 
 
@@ -111,6 +112,7 @@ IPAddress timeServer3( 64,   90, 182,  55);
 
 const int NTP_PACKET_SIZE= 48;           // NTP time stamp is in the first 48 bytes of the message
 byte packetBuffer[NTP_PACKET_SIZE];      //buffer to hold incoming and outgoing packets
+uint8_t ntpTime[6];
 
 // A UDP instance to let us send and receive packets over UDP
 EthernetUDP Udp;
@@ -123,7 +125,6 @@ Adafruit_SSD1306 display(OLED_RESET);
 //=========================================================================================================================
 void setup ()
 {  
-
   // Start I2C communication
   I2c.begin();
   I2c.timeOut(30000);  // set I2C timeout to 30 seconds
@@ -134,23 +135,22 @@ void setup ()
   display.setTextColor(WHITE);
   display.setTextSize(1);
   display.setCursor(0,10);
-  display.println("Leak Detect v2.02");
+  display.println("Leak Detect v2.03");
   display.display();
 
   Serial.begin(9600);
   #ifdef PRINT_DEBUG
     while (!Serial && millis() < 6000) {}  // for Leonardo wait here for a few seconds for serial monitor connection
-    Serial.println(F("Leak Detect v2.02"));
+    Serial.println(F("Leak Detect v2.03"));
   #endif
   
   // Initialize Ethernet connection and UDP
-  uint8_t ntpTime[6];
   bool EthernetOK = setupNTPTime();
   delay(2000);
   if(EthernetOK)
   {
     // Get the NTP Time
-    if(getTime(ntpTime))
+    if( getTime(ntpTime) )
     {
       // Set weekly countdown timer - Sunday noon
       weeklyHeartbeatTimer = millis() + getMsUntilSundayNoon(ntpTime);
@@ -169,7 +169,7 @@ void setup ()
   
   
   for(int i = 0; i < NUM_WIRED_SENSORS; i++)
-  {  pinMode(InputPinNum[i], INPUT); }
+  { pinMode(InputPinNum[i], INPUT); }
   pinMode(ISWETOUTPUT, OUTPUT);  // Red LED and reed relay
   digitalWrite(ISWETOUTPUT, LOW);
   
@@ -193,8 +193,8 @@ void setup ()
 //=========================================================================================================================
 void loop ()
 {
-  static uint32_t checkNtpTimer = millis() + (MINUTE * 60UL * 48UL);  // Check NTP time in 48 hours
-  static uint32_t CheckSensorsTimer =    0;                           // Timer to check the sensors every second
+  static uint32_t checkNtpTimer = millis() + MINUTE;  // Timer to refresh NTP time
+  static uint32_t CheckSensorsTimer = 0;              // Timer to check the sensors
 
   if ( (long)(millis() - CheckSensorsTimer) >= 0 )
   {
@@ -203,10 +203,7 @@ void loop ()
     display.println("CHECKING SENSORS...");
     display.display();
     
-uint32_t debugTimer = millis();  // srg debug
     ProcessSensors();  // Check sensors to see if anything is wet
-Serial.print("Time to process sensors: ");
-Serial.println(millis() - debugTimer);
     
     updateOledDisplay();
     CheckSensorsTimer = millis() + 1000UL; // add 1 second to timer
@@ -228,23 +225,6 @@ Serial.println(millis() - debugTimer);
     #endif
   }  // end weekly heartbeat
 
-  // Check time once every 2 days and adjust Sunday countdown
-  if( (long)( millis() -  checkNtpTimer) > 0 )
-  {
-    uint8_t ntpRefresh[6];
-    
-    if( getTime(ntpRefresh) )
-    {  
-      checkNtpTimer = millis() + (MINUTE * 60UL * 48UL);  // add 48 hours to check NPT timer
-      weeklyHeartbeatTimer = millis() + getMsUntilSundayNoon(ntpRefresh); 
-    } // Update weekly countdown timer with mS until Sunday noon
-    else
-    {  
-//      SendTweet("Failed to update NTP time");  // Failer to get time from server, send tweet about NTP failure
-      checkNtpTimer = millis() + (5UL * MINUTE);  // try again in 5 minutes
-    } 
-  }
-  
   // If anything is wet, turn on LED and relay (they are on the same output
   bool wetOutputState = LOW;
   for(int i = 0; i < NUM_WIRED_SENSORS + NUM_WIRELESS_SENSORS; i++)
@@ -253,7 +233,17 @@ Serial.println(millis() - debugTimer);
     { wetOutputState = HIGH; }
   }    
   digitalWrite(ISWETOUTPUT, wetOutputState);  // turn on Red LED and Relay if anything is wet
-  
+
+  // Check NTP timer
+  if( (long)( millis() -  checkNtpTimer) > 0 )
+  {
+    if( getTime(ntpTime) )
+    {  
+      checkNtpTimer = millis() + MINUTE;
+      weeklyHeartbeatTimer = millis() + getMsUntilSundayNoon(ntpTime); 
+    }
+  }
+    
 }  // end loop()
 
 
@@ -760,8 +750,8 @@ void PrintStates()
 void updateOledDisplay()
 { 
   const int dispDelay = 1500;
-  uint8_t ntpTime[6];
-  getTime(ntpTime);
+//  uint8_t ntpTime[6];
+//  getTime(ntpTime); - SRG I don't think I keed to check NTP time so often
 
   if( masterBath.online == false)
   {
@@ -771,6 +761,7 @@ void updateOledDisplay()
     display.display();
     delay(dispDelay);
   }
+
   if( guestBath.online == false)
   {
     display.clearDisplay();    
@@ -884,7 +875,7 @@ uint32_t getMsUntilSundayNoon(uint8_t *ntpTime)
   uint32_t mStoMidnight; // mS from now to midnight
   mStoMidnight =  (24 - (ntpTime[0] + 1)) * 3600000UL;  // convert hours left in the day to mS
   mStoMidnight += (60 - (ntpTime[2] + 1)) * 60000UL;    // add minutes left in current hour to mS
-  mStoMidnight += (60 - ntpTime[3]) * 1000UL;           // add seconds left in current minute left to mS
+  mStoMidnight += (60 -  ntpTime[3]) * 1000UL;          // add seconds left in current minute left to mS
   
   // Starting from midnight today, calculate how many days until Sunday starts
   int daysToSunday = 7 - ntpTime[5]  - 1;
@@ -931,10 +922,10 @@ bool setupNTPTime()
 //========================================================================================================================
 bool getTime(uint8_t *ntpTime)
 {
-  static uint32_t lastNtpTimeCheck =  0;  // Last time NPT was checked, don't do within 4 seconds
+  static uint32_t lastNtpTimeCheck = 0;  // Last time NPT was checked
 
   // Don't check NPT time again too quickly
-  if ((long) (millis() - lastNtpTimeCheck ) < 5000)
+  if ( (long)(millis() - lastNtpTimeCheck ) < 5000UL )
   { delay(6000); }
   
   lastNtpTimeCheck = millis();
