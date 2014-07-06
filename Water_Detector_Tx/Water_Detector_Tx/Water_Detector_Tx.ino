@@ -1,16 +1,14 @@
 /*
-panStamp Tx for Water detector
+panStamp Tx for Water detector.  
+When uploading sketch be sure to uncomment the right #define depending on whether this is master bath or guest bath
   
-Simple panStamp test - doesn't use SWAP protocal
-Source: http://www.panstamp.org/forum/showthread.php?tid=22
+Change Log:
+v2.00  07/04/14 - Made ledColor an enum, added spare data field and checksum
 
-
-To do
- How to wake panStamp with input button
+ 
 
 Changes for v2 PCB
  Use square RGB Led, sparkfun COM-11679
- Connect DS18B20 power to an output pin and use to turn it on/off - if V1 draws too much power
  Move batteries .08" up
  put Led to the right of status pushbutton
  move on/off switch up and put text below switch
@@ -27,13 +25,15 @@ Outputs:
 3 PWM for RGB LED
 
 
-Data to Transmit (7 bytes):
+Data to Transmit (10 bytes):
 byte 0: Rx ID - ID of panStamp we are sending data too
 byte 1: Tx ID - ID of this panStamp
 byte 2: Wet/Dry Status from sponge/Op-amp. Wet = true, Dry = false
 byte 3-4: Air temperature
 Byte 5-6: battery voltage in milliamps. Battery voltage is measured with code, not an input pin
-
+Byte 7-8: Spare
+Byte 9: Checksum
+ 
 panStamp will sleep for 8 second, sleepWd(), wake up and transmit data, about 0.4 seconds, then repeat.
 Average current draw is 1mA (about 20mA when awake and 0.009 mA when asleep)
 One CR123 battery should last 2 months
@@ -50,27 +50,11 @@ D6 - Status LED, Red, PWM
 D8 - 1Wire temperature sensor input
 D9 - Status button input
 
-panStamp Pinout
-     
-      ANT
-GND         GND
-D8          GND
-D9          D7
-A0          D6
-A1          D5
-A2          D4
-GND         D3
-A3          D1
-A4 SCA      D0
-A5 SCL      GND
-A6          VCC
-A7          RST
-
-*/
+ */
 
 // Comment out all but one DEVICE_xxx.  This sets the devide ID for the panStamp
-#define DEVICE_MASTER_BATH   // gray antenna
-// #define DEVICE_GUEST_BATH  // orange anteanna
+//#define DEVICE_MASTER_BATH   // gray antenna
+#define DEVICE_GUEST_BATH  // orange anteanna
 
 #include <Arduino.h>
 #include "EEPROM.h"              // panStamp address is saved to EEPROM http://www.arduino.cc/en/Reference/EEPROM
@@ -84,24 +68,23 @@ A7          RST
 #define WET LOW    // When digital input from sponge/Op-Amp is LOW, the sponge is wet
 #define TEMPERATURE_PRECISION 9
 
-byte const LED_Red =            6;  
-byte const LED_Grn =            5;  
-byte const LED_Blu =            3;  
-byte const statusBtn =          9;  // Status pushbutton
-byte const spongeInD =          4;  // Digital Input D3
-byte const bytesToSesnd =       7;  // bytes to send to receiving panStamp
-byte const tempSensor =         8;  // One Wire temp sensor
+byte const LED_RED_PIN =         6; // RGB LED
+byte const LED_GRN_PIN =         5;
+byte const LED_BLU_PIN =         3;
+byte const STATUS_BTN_PIN =      9;  // Status pushbutton input
+byte const SPONGE_PIN  =         4;  // Sponge input pin
+byte const DATA_LENGTH =        10;  // bytes to send to receiving panStamp
+byte const TEMP_SENSOR_PIN =     8;  // One Wire temp sensor pin
+const uint16_t INVALID_1WIRE_TEMP =   185; // Temp returned by 1wire when it doesn't have a vaid temperature
 
-// color setting for LED
-byte const YELLOW = 1;  // Volts starting to get low
-byte const GREEN =  2;  // volts okay
-byte const RED =    3;  // volts low
-byte const BLUE =   4;  // Sponge is wet
+// Color setting for LED
+// Green - volts ok, yellow - volts getting low, red - low volts, blue - water detected
+enum ledColor { GREEN, YELLOW, RED, BLUE, WHITE };
 
 CC1101 cc1101;   // http://code.google.com/p/panstamp/wiki/CC1101class
 
 // Setup a oneWire instances to communicate OneWire temp sensor
-OneWire oneWire(tempSensor); // strand is under kitchen and dining room, IDs 0-16
+OneWire oneWire(TEMP_SENSOR_PIN); // strand is under kitchen and dining room, IDs 0-16
 // Pass our oneWire reference to Dallas Temperature. 
 DallasTemperature sensors(&oneWire);
 
@@ -119,12 +102,12 @@ byte receiverAddress =   99;
 #endif
 
 // Function Prototypes
-void statusLight(byte color);
+void statusLight(ledColor color);
 bool isWet();
 unsigned int readVcc();
 
 //============================================================================
-void statusLight(byte color)
+void statusLight(ledColor color)
 {
   byte redColor;
   byte grnColor;
@@ -153,23 +136,23 @@ void statusLight(byte color)
       grnColor = 0;
       bluColor = 255;
       break;
-    default:  // brown
-      redColor = 165;
-      grnColor = 42;
-      bluColor = 42;
+    default:  // White
+      redColor = 255;
+      grnColor = 255;
+      bluColor = 255;
       break;
   } 
 
-  analogWrite(LED_Red, redColor);
-  analogWrite(LED_Grn, grnColor);
-  analogWrite(LED_Blu, bluColor);
+  analogWrite(LED_RED_PIN, redColor);
+  analogWrite(LED_GRN_PIN, grnColor);
+  analogWrite(LED_BLU_PIN, bluColor);
   
   delay(500);
   
   // Turn LED off
-  analogWrite(LED_Red, 0);
-  analogWrite(LED_Grn, 0);
-  analogWrite(LED_Blu, 0);
+  analogWrite(LED_RED_PIN, 0);
+  analogWrite(LED_GRN_PIN, 0);
+  analogWrite(LED_BLU_PIN, 0);
 
 } // statusLight()
 
@@ -194,12 +177,12 @@ void setup()
   delay(1000);
   
   // Setup digital I/O pins
-  pinMode(LED_Red, OUTPUT);
-  pinMode(LED_Grn, OUTPUT);
-  pinMode(LED_Blu, OUTPUT);
+  pinMode(LED_RED_PIN, OUTPUT);
+  pinMode(LED_GRN_PIN, OUTPUT);
+  pinMode(LED_BLU_PIN, OUTPUT);
     
-  pinMode(tempSensor, INPUT);
-  pinMode(statusBtn,  INPUT_PULLUP);
+  pinMode(TEMP_SENSOR_PIN, INPUT);
+  pinMode(STATUS_BTN_PIN,  INPUT_PULLUP);
   
   
   // Initialize the CC1101 RF Chip
@@ -210,8 +193,8 @@ void setup()
   // Start up the library for temp sensors
   sensors.begin();
 
-  // Blink status light green
-  statusLight(GREEN);
+  // Blink status light
+  statusLight(WHITE);
 
 } // setup()
 
@@ -236,47 +219,59 @@ void loop()
 {
   
   static uint16_t airTemp; 
-  static int debugcnt;
   panstamp.sleepWd(WDTO_8S);  // Sleep for 8 seconds. millis() doesn't increment while sleeping
+  delay(100);  // time to wake up
+
+  uint16_t battery = readVcc();          // Read battery voltage
 
     sensors.requestTemperatures(); // Send the command to get temperatures
-    delay(100);
     airTemp = sensors.getTempFByIndex(0);  // Read temp sensor
- 
 
-  CCPACKET data;
-  data.length = bytesToSesnd;                     // # bytes that make up packet to transmit
-  data.data[0] = receiverAddress;                 // Address of panStamp Receiver we are sending too. THIS IS REQUIRED BY THE CC1101 LIBRARY
-  data.data[1] = senderAddress;                   // Address of this panStamp Tx
-  data.data[2] = isWet();                         // Read wet-dry status
-  data.data[3] = airTemp >> 8 & 0xff;             // High byte - shift bits 8 places, 0xff masks off the upper 8 bits
-  data.data[4] = airTemp & 0xff;                  // Low byte, just mask off the upper 8 bits
-  uint16_t battery = readVcc();                   // Read battery voltage
-  data.data[5] = battery >> 8 & 0xff;             // High byte - shift bits 8 places, 0xff masks off the upper 8 bits
-  data.data[6] = battery & 0xff;                  // Low byte, just mask off the upper 8 bits
-
-  
-  cc1101.sendData(data); // Send out data
+  // Send data only if voltage is >= 2500mV and temperature != INVALID_1WIRE_TEMP (185 is invalid and often sent by 1wire when starting up)
+  // If voltage is lower, device generates false alarms
+  if ( battery >= 2500 && airTemp != INVALID_1WIRE_TEMP)
+  {
+    CCPACKET data;
+    data.length = DATA_LENGTH;          // # bytes that make up packet to transmit
+    data.data[0] = receiverAddress;     // Address of panStamp Rx data is sent too. THIS IS REQUIRED BY THE CC1101 LIBRARY
+    data.data[1] = senderAddress;       // Address of this panStamp Tx
+    data.data[2] = isWet();             // Read wet-dry status
+    data.data[3] = airTemp >> 8 & 0xff; // High byte - shift bits 8 places, 0xff masks off the upper 8 bits
+    data.data[4] = airTemp & 0xff;      // Low byte, just mask off the upper 8 bits
+    data.data[5] = battery >> 8 & 0xff; // High byte - shift bits 8 places, 0xff masks off the upper 8 bits
+    data.data[6] = battery & 0xff;      // Low byte, just mask off the upper 8 bits
+    data.data[7] = 0x00;                // Sprare
+    data.data[8] = 0x00;                // Spare
+    // Calculate checksum
+    data.data[9] = 0; // clear 
+    for( int i=0; i < DATA_LENGTH-1; i++)
+    { data.data[9] += data.data[i]; }
+    
+    // Transmit data
+    cc1101.sendData(data);
+  }
     
   // When status button is pressed (LOW) turn on status LED
   // Need to hold down up to 8 seconds because panStamp is asleep most of the time
-  if(digitalRead(statusBtn)  == LOW)   
+  if(digitalRead(STATUS_BTN_PIN) == LOW)   
   {
     // LED should reflect voltage level
-    if(battery < 280)
+    if(battery < 2700)
     { statusLight(RED); }
-    
-    if(battery < 300)
+    else if(battery < 2900)
     { statusLight(YELLOW); }
     else
     { statusLight(GREEN); }
+    delay(500);
     
     // Make LED blue if sponge is wet
     if(isWet() == true)
-    { statusLight(BLUE); }
+    { 
+      statusLight(BLUE); 
+      delay(500);
+    }
   }
   
-   
 }  // loop()
 
 
@@ -301,9 +296,9 @@ bool isWet()
   bool secondreading;
   do 
   {
-    firstreading = digitalRead(spongeInD);
+    firstreading = digitalRead(SPONGE_PIN);
     delay(10);
-    secondreading = digitalRead(spongeInD);
+    secondreading = digitalRead(SPONGE_PIN);
   } while (firstreading != secondreading);
   
   if (firstreading == WET)

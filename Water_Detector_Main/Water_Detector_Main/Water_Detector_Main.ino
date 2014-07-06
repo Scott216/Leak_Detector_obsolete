@@ -2,6 +2,20 @@
 // directory cd Dropbox/Arduino/Water_Detector/ 
 // Uses Leonardo
 
+/*  
+To do:
+
+
+Rev history
+v2.00 05/28/14 - Changed low temp alarm logic so it only sends low temp tweet if voltage > 2500 mA.  Get false alarms when 
+                 voltage is below this
+v2.01 06/27/14 - Updated tx offline message to display hrs or sec depending on how long it was offline.  Fixed 
+                 updateOledDisplay so Tx offline messages would display
+v2.02 07/04/14 - Added checksum to data packet, renamed some constants
+ 
+*/
+
+
 #include "Arduino.h"
 #include <SPI.h>             // Allows you to communicate with SPI devices. See: http://arduino.cc/en/Reference/SPI
 #include <Ethernet.h>        // http://arduino.cc/en/Reference/Ethernet
@@ -13,28 +27,24 @@
 #include "Water_Detector_Main_Library.h"    // Include application, user and local libraries
 #include <avr/pgmspace.h>    // Store data in flash.  http://arduino.cc/en/Reference/PROGMEM
 
-// #define CRESTVIEW     // Comment this out when in Vermont
 // #define PRINT_DEBUG      // Comment this out to turn off verbose printing
 
 byte mac[] = { 0x90, 0xA2, 0xDA, 0xEF, 0x46, 0x81 };
-
-#ifdef CRESTVIEW
-byte ip[] = { 192, 168, 216, 50 };  // Crestview
-#else
-byte ip[] = { 192, 168, 46, 81 };   // Vermont
-#endif
+byte ip[] =  { 192, 168, 46, 81 };
 
 // Analog inputs 0 & 1 are configured as Digitol I/O.
 //      Name              I/O    Description
 #define ISWETOUTPUT         0   // Turns on Red LED and relay
 #define OLED_RESET          1
-// IC2                     2,3
-// Reserved for SD Card     4
-// Pad for future use       5
+// Reserved                 2      I2C
+// Reserved                 3      I2C
+// Reserved                 4      SD Card
+//                          5      Unused
 #define HOTTUBFILTER        6   // Sponge in crawlspace by hot tub filter and pump
 #define HOTTUBBACK          7   // Sponge in crawlspace behind hot tub
 #define WATERTANK           8   // Sponge in crawlspace corner by water tank
 #define KITCHENSINK         9   // Sponge under kitchen sink
+// reserved                10      Slave select
 #define TBD2               11   // Future use
 #define TBD1               12   // Future Use
 #define WATERHEATER        A0   // Sponge under hot water heater
@@ -43,8 +53,6 @@ byte ip[] = { 192, 168, 46, 81 };   // Vermont
 #define DISHWASHER         A3   // Sponge behind dishwasher
 #define FIRSTFLOORBRSINK   A4   // Sponge in first floor bathroom sink
 #define WASHINGMACH        A5   // Sponge next to washing machine
-// Pin 10 is reserved for Slave Select.  Pins 2 * 3 are used for I2C
-
 
 #define WET HIGH       // When a sponge is wet, the digital input is HIGH
 #define DRY LOW        // When a sponge is dry, the digital input is LOW
@@ -53,18 +61,19 @@ const uint32_t MINUTE  =                   60000;  // milliseconds in a minute
 const uint32_t DOUBLE_CHECK_DELAY =   2 * MINUTE;  // Delay after sensor first detects water to check again after a few minutes
 const uint32_t DRYING_DELAY =       180 * MINUTE;  // 3 hour delay when sponges are drying out before twitter it is updated. Prevents extra alerts from going out
 
-const byte PACKETSPERPANSTAMP = 7;  // Packets sent by each panStamp
-const byte ADDRMASTERBATH =     1;  // panStamp device address for 2nd floor master bath
-const byte ADDRGUESTBATH =      2;  // panStamp device address for 2nd floor guest bath
-const byte NUMTRANSMITTERS =    2;  // number of panStamp transmitters on this network
-const byte NUMWIREDINPUTS =    12;  // Number of wired water detector inputs
-bool isAnythingWet =        false;  // Flags if anything is wet
+#define ADDR_I2C_OLED           0x3C   // OLED Display I2C address
+#define ADDR_I2C_PANSTAMP         21   // I2C Slave address of panStamp Rx
+const byte ADDR_MASTER_BATH =      1;  // panStamp device address for 2nd floor master bath
+const byte ADDR_GUEST_BATH =       2;  // panStamp device address for 2nd floor guest bath
+const byte NUM_WIRELESS_SENSORS =  2;  // number of panStamp transmitters on this network
+const byte NUM_WIRED_SENSORS =    12;  // Number of wired water detector inputs
+const byte DATA_LENGTH =          10;  // Packets sent by each panStamp
+bool isAnythingWet =           false;  // Flags if anything is wet
 
-#define ADDRSLAVEI2C  21 // I2C Slave address of panStamp Rx
 
 // Use arrays to hold input status.  Total number of inputs are wired plus wireless sensors
-bool     InputState[      NUMWIREDINPUTS + NUMTRANSMITTERS];     // Input reading, HIGH when water is present LOW when it's not
-bool     WaterDetect[     NUMWIREDINPUTS + NUMTRANSMITTERS];     // Sensor state after delay to make sure it's really wet or dry
+bool  InputState[NUM_WIRED_SENSORS + NUM_WIRELESS_SENSORS];     // Input reading, HIGH when water is present LOW when it's not
+bool WaterDetect[NUM_WIRED_SENSORS + NUM_WIRELESS_SENSORS];     // Sensor state after delay to make sure it's really wet or dry
 uint32_t weeklyHeartbeatTimer = 0;                               // mS until Sunday at noon, at which time a tweet will go out to verify sketch is still running  static uint8_t TweetCounter;  // prevent tweets from getting to high
 
 // Define typedef structurs for panStamp data from remote sensors.  Typedef definition is in LocalLibrary.h
@@ -93,14 +102,12 @@ unsigned long sendNTPpacket(IPAddress& address);
 void updateOledDisplay();
 
 
-// Both these NPT servers work as of 4/17/13
+// NPT servers work as of 4/17/13
 // List of servers: http://tf.nist.gov/tf-cgi/servers.cgi
 // don't query more then 4 seconds
 IPAddress timeServer1( 216, 171, 112,  36); 
 IPAddress timeServer2( 206, 246, 122, 250);
 IPAddress timeServer3( 64,   90, 182,  55);  
-//IPAddress timeServer4( 165, 193, 126, 229);  
-//IPAddress timeServer5( 96,   47,  67, 105); 
 
 const int NTP_PACKET_SIZE= 48;           // NTP time stamp is in the first 48 bytes of the message
 byte packetBuffer[NTP_PACKET_SIZE];      //buffer to hold incoming and outgoing packets
@@ -108,7 +115,7 @@ byte packetBuffer[NTP_PACKET_SIZE];      //buffer to hold incoming and outgoing 
 // A UDP instance to let us send and receive packets over UDP
 EthernetUDP Udp;
 
-// Create OLED dispplay object
+// Instantiate OLED dispplay object
 Adafruit_SSD1306 display(OLED_RESET);
 
 
@@ -117,23 +124,23 @@ Adafruit_SSD1306 display(OLED_RESET);
 void setup ()
 {  
 
-  // Initialize I2C communication
+  // Start I2C communication
   I2c.begin();
   I2c.timeOut(30000);  // set I2C timeout to 30 seconds
   I2c.pullup(0);       // disable internal pullup resistors on I2C pins, don't want to pull-up to 5 volts because of panStamp
 
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3C (for the 128x32)
-  display.clearDisplay();   // clears the screen and buffer
+  display.begin(SSD1306_SWITCHCAPVCC, ADDR_I2C_OLED);  
+  display.clearDisplay();  
   display.setTextColor(WHITE);
-  display.setTextSize(2);
+  display.setTextSize(1);
   display.setCursor(0,10);
-  display.println("Startup");
+  display.println("Leak Detect v2.02");
   display.display();
 
   Serial.begin(9600);
-  #ifdef PRINT_DEBU
-    while (!Serial && millis() < 6000) {}  // for Leonardo wait here for up to 6 seconds for serial monitor connection
-    Serial.println(F("Leak Detector startup"));
+  #ifdef PRINT_DEBUG
+    while (!Serial && millis() < 6000) {}  // for Leonardo wait here for a few seconds for serial monitor connection
+    Serial.println(F("Leak Detect v2.02"));
   #endif
   
   // Initialize Ethernet connection and UDP
@@ -161,19 +168,18 @@ void setup ()
   }
   
   
-  for(int i = 0; i < NUMWIREDINPUTS; i++)
+  for(int i = 0; i < NUM_WIRED_SENSORS; i++)
   {  pinMode(InputPinNum[i], INPUT); }
   pinMode(ISWETOUTPUT, OUTPUT);  // Red LED and reed relay
   digitalWrite(ISWETOUTPUT, LOW);
   
   // Initialiaze one shot triggers for messages
   masterBath.lowVoltMsgFlag = false;
-  guestBath.lowVoltMsgFlag =  false;
   masterBath.lowTempMsgFlag = false;
+  guestBath.lowVoltMsgFlag =  false;
   guestBath.lowTempMsgFlag =  false;
 
-
-  SendTweet("Leak Detector Restarted");  // Send startup tweet
+  SendTweet("Leak Detector Restarted v2.02");  // Send startup tweet
   
   ProcessSensors();  // Check sensors to see if anything is wet
 
@@ -192,22 +198,27 @@ void loop ()
 
   if ( (long)(millis() - CheckSensorsTimer) >= 0 )
   {
-    display.setCursor(0,0);
+    display.clearDisplay();    
+    display.setCursor(0,10);
     display.println("CHECKING SENSORS...");
     display.display();
     
-    ProcessSensors();  // Check sensors once a second to see if anything is wet
+uint32_t debugTimer = millis();  // srg debug
+    ProcessSensors();  // Check sensors to see if anything is wet
+Serial.print("Time to process sensors: ");
+Serial.println(millis() - debugTimer);
+    
     updateOledDisplay();
-    CheckSensorsTimer = millis() + 1000UL;
+    CheckSensorsTimer = millis() + 1000UL; // add 1 second to timer
   }
   
-  // Every Sunday at noon send a Tweet to indicate sketch is still running (heartbeat). Send battery voltages
+  // Every Sunday at noon send a Tweet to indicate sketch is still running (heartbeat). Send battery voltages from wireless sensors
   if( (long)(millis() - weeklyHeartbeatTimer) >= 0 )
   {
     char tweetMsg[34+1];  // longest text is 34 characters
-    sprintf_P(tweetMsg, PSTR("Leak Detector: Master Bath = %d mV"), masterBath.volts, guestBath.volts);
+    sprintf_P(tweetMsg, PSTR("Leak Detector: Master Bath = %d mV"), masterBath.volts);
     SendTweet(tweetMsg);
-    sprintf_P(tweetMsg, PSTR("Leak Detector: Guest Bath = %d mV"), guestBath.volts, guestBath.volts);
+    sprintf_P(tweetMsg, PSTR("Leak Detector: Guest Bath = %d mV"), guestBath.volts);
     SendTweet(tweetMsg);
     
     weeklyHeartbeatTimer =  millis() + (MINUTE * 60UL * 24UL * 7UL); // add 1 week to heartbeat timer
@@ -236,7 +247,7 @@ void loop ()
   
   // If anything is wet, turn on LED and relay (they are on the same output
   bool wetOutputState = LOW;
-  for(int i = 0; i < NUMWIREDINPUTS + NUMTRANSMITTERS; i++)
+  for(int i = 0; i < NUM_WIRED_SENSORS + NUM_WIRELESS_SENSORS; i++)
   {
     if( WaterDetect[i] == WET )
     { wetOutputState = HIGH; }
@@ -251,19 +262,19 @@ void loop ()
 //=========================================================================================================================
 void ProcessSensors()
 {
-  char twitterMsg[60];  // max message is 31 char
+  char twitterMsg[60];  // max message actually used is 31 char
   static bool masterTxOfflineMsg = false;    // One shot flag when Master Bath transmitter goes offline
   static bool guestTxOfflineMsg =  false;    // One shot flag when Guest Bath transmitter goes offline
   static uint32_t masterBathOfflineTime = 0; // Time master bath sensor went offline
   static uint32_t guestBathOfflineTime  = 0;  // Time guest bath sensor went offline
-  static uint32_t DoubleCheckTime[ NUMWIREDINPUTS + NUMTRANSMITTERS];     // Used to wait a few minutes after a sensor is triggered to check the sensor a 2nd time to see if there is still water. Like button debouncing
-  static uint32_t WetToDryDelay[   NUMWIREDINPUTS + NUMTRANSMITTERS];     // Delay used to let sponge dry out before indicating it's dry
-  static bool     isWet[           NUMWIREDINPUTS + NUMTRANSMITTERS];     // Used to trigger if an input goes from Dry to Wet.  Trigger will turn on WaterDetectOutput for 10 seconds.
+  static uint32_t DoubleCheckTime[ NUM_WIRED_SENSORS + NUM_WIRELESS_SENSORS];     // Used to wait a few minutes after a sensor is triggered to check the sensor a 2nd time to see if there is still water. Like button debouncing
+  static uint32_t WetToDryDelay[   NUM_WIRED_SENSORS + NUM_WIRELESS_SENSORS];     // Delay used to let sponge dry out before indicating it's dry
+  static bool     isWet[           NUM_WIRED_SENSORS + NUM_WIRELESS_SENSORS];     // Used to trigger if an input goes from Dry to Wet.  Trigger will turn on WaterDetectOutput for 10 seconds.
 
   isAnythingWet = false;  // reset flag
   
   // read hard wired inputs
-  for(int i = 0; i < NUMWIREDINPUTS; i++)
+  for(int i = 0; i < NUM_WIRED_SENSORS; i++)
   {
     // Read hard wired sensors
     // Loop until two consecutive reading are the same
@@ -282,23 +293,24 @@ void ProcessSensors()
   }
   
   // Read Remote Master Bath sensor
-  if( ReadRFSensors( &masterBath, ADDRMASTERBATH ) )
+  if( ReadRFSensors( &masterBath, ADDR_MASTER_BATH ) )
   {
-    
     // If master bath came back online, send a tweet
     if ( masterTxOfflineMsg == true )
     {
+      if ( (millis() - masterBathOfflineTime) < 10800000UL ) // < 3 hours
       sprintf_P(twitterMsg, PSTR("Master Bath is back online: %dmV. Offline for %lu sec"), masterBath.volts, (millis() - masterBathOfflineTime) / 1000UL );
+      else
+      sprintf_P(twitterMsg, PSTR("Master Bath is back online: %dmV. Offline for %lu hrs"), masterBath.volts, (millis() - masterBathOfflineTime) / 3600000UL );
       SendTweet(twitterMsg);
     }
 
     masterTxOfflineMsg = false; // reset flag for sending Tweeet about wireless sensor being offline
         
-    InputState[NUMWIREDINPUTS] = masterBath.IsWet;
+    InputState[NUM_WIRED_SENSORS] = masterBath.IsWet;
     if ( masterBath.IsWet == WET )
     { isAnythingWet = true; }
 
-    
     // Check for low volts
     if( masterBath.online == true && masterBath.volts < 2800 && masterBath.lowVoltMsgFlag == false)
     {
@@ -313,7 +325,7 @@ void ProcessSensors()
     }
     
     // Check for low temperature in Masster Bath
-    if( masterBath.online == true && masterBath.temp <= 40 && masterBath.temp >= 20 && masterBath.lowTempMsgFlag == false )
+    if( masterBath.online == true && masterBath.temp <= 40 && masterBath.temp >= 20 && masterBath.lowTempMsgFlag == false && masterBath.volts > 2500 )
     {
       sprintf_P(twitterMsg, PSTR("Low temp Master Bath: %d F"), masterBath.temp);
       SendTweet(twitterMsg);
@@ -338,18 +350,20 @@ void ProcessSensors()
   }
   
   // Read Remote Guest Bath sensor
-  if( ReadRFSensors( &guestBath, ADDRGUESTBATH ) )
+  if( ReadRFSensors( &guestBath, ADDR_GUEST_BATH  ) )
   {
-    
     // If guest bath came back online, send a tweet
     if ( guestTxOfflineMsg == true )
     {
-      sprintf_P(twitterMsg, PSTR("Guest Bath is back online: %dmV. Offline for %lu sec"), guestBath.volts, (millis() - guestBathOfflineTime) / 1000UL );
+      if ( (millis() - guestBathOfflineTime) < 10800000UL ) // < 3 hours
+      { sprintf_P(twitterMsg, PSTR("Guest Bath is back online: %dmV. Offline for %lu sec"), guestBath.volts, (millis() - guestBathOfflineTime) / 1000UL );}
+      else
+      { sprintf_P(twitterMsg, PSTR("Guest Bath is back online: %dmV. Offline for %lu hrs"), guestBath.volts, (millis() - guestBathOfflineTime) / 3600000UL );}
       SendTweet(twitterMsg);
     }
      guestTxOfflineMsg = false; // reset flag for sending Tweeet about wireless sensor being offline
    
-    InputState[NUMWIREDINPUTS + 1] = guestBath.IsWet;
+    InputState[NUM_WIRED_SENSORS + 1] = guestBath.IsWet;
     if ( guestBath.IsWet == WET )
     { isAnythingWet = true; }
     
@@ -362,12 +376,10 @@ void ProcessSensors()
     }
     // Reset low volts flag if volts is over 3000 mV
     if(guestBath.volts > 3000)
-    {
-      guestBath.lowVoltMsgFlag = false;
-    }
+    { guestBath.lowVoltMsgFlag = false; }
     
     // Check for low temperature in Guest Bath
-    if(guestBath.online == true &&  guestBath.temp <= 40 && guestBath.temp >= 20 && guestBath.lowTempMsgFlag == false)
+    if(guestBath.online == true &&  guestBath.temp <= 40 && guestBath.temp >= 20 && guestBath.lowTempMsgFlag == false && guestBath.volts > 2500)
     {
       sprintf_P(twitterMsg, PSTR("Low temp in Guest Bath: %d F"), guestBath.temp);
       SendTweet(twitterMsg);
@@ -375,13 +387,11 @@ void ProcessSensors()
     }
     // Reset low temp flag if temp is 50 F
     if(guestBath.temp >= 50)
-    {
-      guestBath.lowTempMsgFlag = false;
-    }
+    { guestBath.lowTempMsgFlag = false; }
   }
   else
   { 
-    // In Guest bath is offline, send tweet
+    // If Guest bath is offline, send tweet
     if( guestBath.online == false && guestTxOfflineMsg == false )
     {
       strcpy_P(twitterMsg, PSTR("Guest Bath is offline"));
@@ -392,7 +402,7 @@ void ProcessSensors()
   }
   
   // See if any inputs have gone from Dry to Wet
-  for(int i = 0; i < NUMWIREDINPUTS + NUMTRANSMITTERS; i++)
+  for(int i = 0; i < NUM_WIRED_SENSORS + NUM_WIRELESS_SENSORS; i++)
   {
     if((InputState[i] == WET) && (isWet[i] == DRY ))
     {
@@ -415,7 +425,7 @@ void ProcessSensors()
   
   
   // Double check input after a delay to see it it's still wet
-  for(int i = 0; i < NUMWIREDINPUTS + NUMTRANSMITTERS; i++)
+  for(int i = 0; i < NUM_WIRED_SENSORS + NUM_WIRELESS_SENSORS; i++)
   {
     if( (isWet[i] == WET) && (WaterDetect[i] == DRY) && ((long)(millis() - DoubleCheckTime[i]) >= 0) )
     {
@@ -430,7 +440,7 @@ void ProcessSensors()
   
   // If input is dry, reset WetFlag[]
   // A sponge isn't determined to be dry unless the input has been dry for DRYING_DELAY (3 hours)
-  for(int i = 0; i < NUMWIREDINPUTS + NUMTRANSMITTERS; i++)
+  for(int i = 0; i < NUM_WIRED_SENSORS + NUM_WIRELESS_SENSORS; i++)
   {
     if(InputState[i] == DRY)
     { isWet[i] = DRY; }
@@ -439,7 +449,7 @@ void ProcessSensors()
   }
   
   // Check for dried out sponge, after long delay
-  for(int i = 0; i < NUMWIREDINPUTS + NUMTRANSMITTERS; i++)
+  for(int i = 0; i < NUM_WIRED_SENSORS + NUM_WIRELESS_SENSORS; i++)
   {
     if( (isWet[i] == DRY) && (WaterDetect[i] == WET) && ((long)(millis() - WetToDryDelay[i]) >= 0))
     {
@@ -454,54 +464,66 @@ void ProcessSensors()
     }
   } // End Wet to Dry
   
-} // ProcessSensors()
+} // end ProcessSensors()
 
 
 //=========================================================================================================================
-// Get the panStamp data
-// I2C will deliver all the panStamp data to panStampData[], but this function only
-// returns data for one panStamp at a time
+// Get the data from wireless sensors 
+// Data from both sensors is saved in panStampData[], but this function only
+// returns data for one sensor at a time depending on the panStampID passed to the function
 //=========================================================================================================================
 bool ReadRFSensors(RemoteSensorData_t* rfsensor, byte panStampID)
 {
-  static bool gotI2CPacket = false;  // Flag to indicate I2C packet came in.  Sketch needs to know when I2C is working so it doesn't process bad data
+  static bool gotI2CPacket = false;  // Flag to indicate I2C packet came in
 
-  int voltCalibration[3]; // voltage calibration, millivolt adjustment.  Use [3] elements because panStamp IDs are 1 and 2, there is no zero
-  voltCalibration[ADDRMASTERBATH] = -71;
-  voltCalibration[ADDRGUESTBATH] =  -40;
+  int voltCalibration[3]; // voltage calibration, millivolt adjustment.  Uses 3 array elements because zero is not used; panStamp IDs are 1 and 2, so it uses those
+  voltCalibration[ADDR_MASTER_BATH] = -71;
+  voltCalibration[ADDR_GUEST_BATH ] = -40;
   
-  const byte panStampOffline =  255;  // if value in panStamp Tx ID byte is 255, it means the panStamp is offline
-  byte panStampData[PACKETSPERPANSTAMP * NUMTRANSMITTERS];     // Array to hold panstamp data sent over
-  int i = 0;
+  const byte PANSTAMP_OFFLINE =  255;  // if value in panStamp Tx ID byte is 255, it means the wireless sensor is offline or checksum failed
+  byte panStampData[DATA_LENGTH * NUM_WIRELESS_SENSORS];   // Array to hold wireless sensor data 
   
-  int readstatus = I2c.read(ADDRSLAVEI2C, NUMTRANSMITTERS * PACKETSPERPANSTAMP , panStampData); // request data from panStamp I2C slave
+  int readstatus = I2c.read(ADDR_I2C_PANSTAMP, NUM_WIRELESS_SENSORS * DATA_LENGTH , panStampData); // read data from panStamp I2C slave
   if(readstatus == 0)
-  {
-    gotI2CPacket = true;  // Flag to indicate sketch received I2C packet
-  }
+  {  gotI2CPacket = true; }
   
-  // If we got an I2C packet, we can process it
-  if(gotI2CPacket)
+  // If got I2C packet, then  process it
+  // First set of bytes of data are Master bath, followed by Guest bath
+  if( gotI2CPacket )
   {
-    gotI2CPacket = false;  // Reset flag
-                           // First 7 bytes of data are Master bath, 2nd 7 bytes are Guest bath
+    gotI2CPacket = false;  // reset
     byte byteOffset = 0;
     switch (panStampID)
     {
-      case ADDRMASTERBATH:
+      case ADDR_MASTER_BATH:
         byteOffset = 0;
         break;
-      case ADDRGUESTBATH:
-        byteOffset = PACKETSPERPANSTAMP;
+      case ADDR_GUEST_BATH :
+        byteOffset = DATA_LENGTH;
         break;
     }
     
-    // If panStamp Tx is online, calculate sensor values and return in rfsensor
-    // panStamp Rx sketch will put 255 in panStamp Tx ID byte if it hasn't received data from Tx in 30 minutes
-    if( panStampData[1 + byteOffset] != panStampOffline )
-    { // panStamp Tx is online
+    // verify checksum
+    byte checksum = 0;
+    for (int k = 0; k < DATA_LENGTH - 1; k++)
+    { checksum += panStampData[k + byteOffset]; }
+    if (  panStampData[DATA_LENGTH - 1  + byteOffset] !=  checksum )  // if checksum is on the left, line is always true
+    {
+      // Checksum failed
+      #ifdef PRINT_DEBUG
+        Serial.println(F("Checksum failed")); 
+      #endif
+      rfsensor->ID = panStampID;
+      rfsensor->online = false;
+      return false;
+    }
+    
+    // Calculate sensor values and return in rfsensor
+    // panStamp Rx sketch will put 255 in panStamp Tx ID byte if it hasn't received data from Tx in 30 minutes or if checksum failed in panStamp Rx
+    if( panStampData[1 + byteOffset] != PANSTAMP_OFFLINE )
+    { // panStamp Tx is ok
       
-      // Calculate millivolts
+      // Get millivolts
       int millivolts;
       millivolts  = panStampData[5 + byteOffset] << 8;
       millivolts |= panStampData[6 + byteOffset];
@@ -516,13 +538,12 @@ bool ReadRFSensors(RemoteSensorData_t* rfsensor, byte panStampID)
       if(localTemp > 100 || localTemp < 0 )
       { localTemp = 0;} // check for bad data
       
-      // Put panStamp data into rfsensor structure, only returns data for one panStamp
-      // even though panStampData[] has data for all transmistters
+      // Put panStamp data into rfsensor structure
       rfsensor->online = true;
-      rfsensor->ID = panStampData[1 + byteOffset];
-      rfsensor->IsWet = panStampData[2 + byteOffset];
-      rfsensor->volts = millivolts;
-      rfsensor->temp = localTemp;
+      rfsensor->ID =     panStampData[1 + byteOffset];
+      rfsensor->IsWet =  panStampData[2 + byteOffset];
+      rfsensor->volts =  millivolts;
+      rfsensor->temp =   localTemp;
       return true;
     }
     else
@@ -547,7 +568,6 @@ bool ReadRFSensors(RemoteSensorData_t* rfsensor, byte panStampID)
 //=========================================================================================================================
 void SendAlert(byte SensorArrayPosition, bool IsWet)
 {
-  
   char alertMsg[17+26+1]; // longest text is 26 characters, add space for time stamp
   if(IsWet == WET)
   {strcpy_P(alertMsg, PSTR("Water Detected - ")); }  // 17 characters
@@ -592,13 +612,13 @@ void SendAlert(byte SensorArrayPosition, bool IsWet)
     case 11:
       strcat_P(alertMsg, PSTR("Water Tank"));
       break;
-    case NUMWIREDINPUTS:  // Master Bath
+    case NUM_WIRED_SENSORS:  // Master Bath
       strcat_P(alertMsg, PSTR("Master Bath Sink"));
       break;
-    case NUMWIREDINPUTS + 1:  // Guest Bath
+    case NUM_WIRED_SENSORS + 1:  // Guest Bath
       strcat_P(alertMsg, PSTR("2nd Fl Guest Bathroom Sink"));  // longest text - 26 char
       break;
-  }
+  }  // end switch
   
   SendTweet(alertMsg);  // Send message to Twitter
   
@@ -673,7 +693,7 @@ int SendTweet(char msgTweet[])
 //=========================================================================================================================
 void PrintStates()
 {
-  int totalInputs = NUMWIREDINPUTS + NUMTRANSMITTERS;
+  int totalInputs = NUM_WIRED_SENSORS + NUM_WIRELESS_SENSORS;
   
   Serial.print(F("\nInputState\t"));
   for(int i = 0; i < totalInputs; i++)
@@ -739,13 +759,28 @@ void PrintStates()
 //=========================================================================================================================
 void updateOledDisplay()
 { 
-  const int dispDelay = 1000;
+  const int dispDelay = 1500;
   uint8_t ntpTime[6];
   getTime(ntpTime);
 
+  if( masterBath.online == false)
+  {
+    display.clearDisplay();    
+    display.setCursor(0,10);
+    display.println("MASTER BATH OFFLINE");
+    display.display();
+    delay(dispDelay);
+  }
+  if( guestBath.online == false)
+  {
+    display.clearDisplay();    
+    display.setCursor(0,10);
+    display.println("GUEST BATH OFFLINE");
+    display.display();
+    delay(dispDelay);
+  }
   
   display.clearDisplay();   
-  display.setTextSize(1);
   
   if (isAnythingWet == false )
   {
@@ -767,85 +802,71 @@ void updateOledDisplay()
     display.setCursor(0,20);
     display.println(timebuf);
     display.display();
-    return;  // Exit function
   }
-  
-  // At least one sponge is Wet, cycle through them all
-  for(int i = 0; i < NUMWIREDINPUTS + NUMTRANSMITTERS; i++)
+  else
   {
-    if ( InputState[i] == WET )         
+    // At least one sponge is Wet, cycle through them all and display the wet ones
+    for(int i = 0; i < NUM_WIRED_SENSORS + NUM_WIRELESS_SENSORS; i++)
     {
-      display.clearDisplay();   
-      display.setCursor(0,10);
-      switch(i)
+      if ( InputState[i] == WET )         
       {
-        case 0: 
-          display.println("1ST FL BATH SINK");
-          break;
-        case 1: 
-          display.println("WASHING MACHINE");
-          break;
-        case 2: 
-          display.println("TBD1");
-          break;
-        case 3: 
-          display.println("TBD2");
-          break;
-        case 4: 
-          display.println("WATER HEATER");
-          break;
-        case 5: 
-          display.println("BOILER");
-          break;
-        case 6: 
-          display.println("FRIG");
-          break;
-        case 7: 
-          display.println("DISH WASHER");
-          break;
-        case 8: 
-          display.println("KITCHEN SINK");
-          break;
-        case 9: 
-          display.println("HOT TUB FILTER");
-          break;
-        case 10: 
-          display.println("HOT TUB REAR");
-          break;
-        case 11: 
-          display.println("WATER TANK");
-          break;
-        case NUMWIREDINPUTS: 
-          display.println("MASTER BATH");
-          break;
-        case NUMWIREDINPUTS + 1: 
-          display.println("GUEST BATH");
-          break;   
-      }  // switch()
-      display.setCursor(0,20);
-      display.println("IS WET");
-      display.display();
-      delay(dispDelay);
-    } // something is wet
-  } // end for loop
+        display.clearDisplay();   
+        display.setCursor(0,10);
+        switch(i)
+        {
+          case 0: 
+            display.println("1ST FL BATH SINK");
+            break;
+          case 1: 
+            display.println("WASHING MACHINE");
+            break;
+          case 2: 
+            display.println("TBD1");
+            break;
+          case 3: 
+            display.println("TBD2");
+            break;
+          case 4: 
+            display.println("WATER HEATER");
+            break;
+          case 5: 
+            display.println("BOILER");
+            break;
+          case 6: 
+            display.println("FRIG");
+            break;
+          case 7: 
+            display.println("DISH WASHER");
+            break;
+          case 8: 
+            display.println("KITCHEN SINK");
+            break;
+          case 9: 
+            display.println("HOT TUB FILTER");
+            break;
+          case 10: 
+            display.println("HOT TUB REAR");
+            break;
+          case 11: 
+            display.println("WATER TANK");
+            break;
+          case NUM_WIRED_SENSORS:
+            display.println("MASTER BATH");
+            break;
+          case NUM_WIRED_SENSORS + 1:
+            display.println("GUEST BATH");
+            break;   
+        }  // switch()
+        display.setCursor(0,20);
+        display.println("IS WET");
+        display.display();
+        delay(dispDelay);
+      } // something is wet
+    } // end for loop
+  } // end isAnythingWet
   
-  if( masterBath.online == false)
-  {
-    display.clearDisplay();    
-    display.setCursor(0,10);
-    display.println("MASTER BATH OFFLINE");
-    display.display();
-    delay(dispDelay);
-  }
-  if( guestBath.online == false)
-  {
-    display.clearDisplay();    
-    display.setCursor(0,10);
-    display.println("GUEST BATH OFFLINE");
-    display.display();
-    delay(dispDelay);
-  }
 }  // updateOledDisplay()
+
 
 //=========================================================================================================================
 // Returns mS until noon on next Sunday
@@ -910,7 +931,6 @@ bool setupNTPTime()
 //========================================================================================================================
 bool getTime(uint8_t *ntpTime)
 {
-
   static uint32_t lastNtpTimeCheck =  0;  // Last time NPT was checked, don't do within 4 seconds
 
   // Don't check NPT time again too quickly
@@ -951,8 +971,10 @@ bool getTime(uint8_t *ntpTime)
 } // getTime()
 
 
+//==========================================================================================================================
 // Got time from NTP server
 // This function puts in ntpTime[] array so it can be used
+//==========================================================================================================================
 void parseTimePacket(uint8_t *ntpTime)
 {
   // positions in ntpTime array
@@ -1019,6 +1041,7 @@ void parseTimePacket(uint8_t *ntpTime)
   long days = epoch / 86400L;
   ntpTime[dow] = (days+4) % 7;
 }  // parseTimePacket
+
 
 //==========================================================================================================================
 // send an NTP request to the time server at the given address

@@ -1,51 +1,32 @@
 /*
-
+ panStamp Rx sketch for water detectors
+ 
+ v2.00 07/04/14 - added checksum to panStamp and I2C data
+ 
  To Do:
  How to handle if one panStamp Tx is working and one is not. lastRxSuccess will not timeout and non-working
  panStamp data will stay in array
 
- panStamp Rx sketch for water detectors
 
  Remote panStamp/Sponge sensors send data to this reciever.
- This panStamp communicates with main Arduino via I2C. The panStamp is the slave
-
- Simple panStamp test - doesn't use SWAP protocal
- Source: http://www.panstamp.org/forum/showthread.php?tid=22
+ This panStamp communicates with main Arduino via I2C. The panStamp is the I2C slave, main Arduino is Master
 
 
- PanStamp data received - this is put into I2C packet
- == panStamp Master Bath ==
- byte 0: panStamp Rx ID
- byte 1: panStamp Tx ID
- byte 2: Wet/Dry Status. Wet = true, Dry = false
+ panStamp data received:
+ byte 0:   panStamp Rx ID
+ byte 1:   panStamp Tx ID
+ byte 2:   Wet/Dry Status. Wet = true, Dry = false
  byte 3-4: Temperature from one wire
- Byte 5-6: ADC value for battery voltage
- == panStamp Guest Bath ==
- byte 7: panStamp Rx ID
- byte 8: panStamp Tx ID
- byte 9: Wet/Dry Status
- byte 10-11: ADC Temperature from TMP36
- Byte 12-13: ADC value for battery voltage
-
-
- panStamp Pinout
-
- ANT
- GND         GND
- D8          GND
- D9          D7
- A0          D6
- A1          D5
- A2          D4  (Amber LED)
- GND         D3
- A3          D1
- A4 SCA      D0
- A5 SCL      GND
- A6          VCC
- A7          RST
-
+ Byte 5-6: Battery voltage (mV)
+ Byte 7-8: Spare
+ Byte 9:   Checksum
+ 
+ I2C data (Same config as panStamp)
+ bytes 0-9: Master Bath
+ bytes 10-19: Guest Bath
 
  */
+
 #include "Arduino.h"
 #include "EEPROM.h"   // http://www.arduino.cc/en/Reference/EEPROM
 #include "cc1101.h"   // http://code.google.com/p/panstamp/source/browse/trunk/arduino/libraries/panstamp/cc1101.h
@@ -57,17 +38,17 @@
 
 
 // The networkAdress of panStamp sender and receiver must be the same
-byte panStampNetworkAdress =   46;  // Network address for all Water Detector panStamps
-byte receiverAddress =         99;  // Device address of this panStamp
-const byte addrSlaveI2C =      21;  // I2C Slave address of this device
-const byte packetsPerPanStamp = 7;  // Packets sent by each panstamp
-const byte addrMasterBath =     1;  // panStamp device address for 2nd floor master bath
-const byte addrGuestBath =      2;  // panStamp device address for 2nd floor guest bath
-const byte numTransmitters =    2;  // number of panStamp transmitters on this network
-const byte panStampOffline =  255;  // Send this to I2C master in the panStamp Rx address to indicate panStamp is offline
-const uint32_t panStampTimeout = 120000; // 2 minute timeout for panStamps
+byte panStampNetworkAdress =    46;   // Network address for all Water Detector panStamps (can't be a const varialbe)
+byte receiverAddress =          99;   // Device address of this panStamp (can't be a const variable)
+const byte SLAVE_ADDR =         21;   // I2C Slave address of this device
+const byte DATA_LENGTH =        10;  // Packets sent by each panstamp
+const byte ADDR_MASTER_BATH =    1;  // panStamp device address for 2nd floor master bath
+const byte ADDR_GUEST_BATH =     2;  // panStamp device address for 2nd floor guest bath
+const byte NUM_TX =              2;  // number of panStamp transmitters on this network
+const byte PANSTAMP_OFFLINE =  255;  // Send this to I2C master in the panStamp Tx address to indicate panStamp is offline
+const uint32_t PANSTAMP_TIMEOUT = 120000; // 2 minute timeout for panStamps
 
-byte I2C_Packet[numTransmitters *  packetsPerPanStamp];   // Array to hold data sent over I2C to main Arduino
+byte I2C_Packet[NUM_TX *  DATA_LENGTH];   // Array to hold data sent over I2C to main Arduino
 uint32_t lastRxSuccess[3];        // miliseconds since last successful receipt of panStamp data.  Arrary starrts at 1
 
 
@@ -115,14 +96,14 @@ void cc1101signalsInterrupt(void)
 void setup()
 {
   Serial.begin(9600);
-  Serial.println(F("Begin panStamp Rx setup()"));
+  Serial.println(F("Begin panStamp Rx setup, v2.00"));
 
   pinMode(LED_COMM, OUTPUT);  // Yellow LED
   digitalWrite(LED_COMM, HIGH);
   delay(500);
   digitalWrite(LED_COMM, LOW);
 
-  Wire.begin(addrSlaveI2C);    // Initiate the Wire library and join the I2C bus
+  Wire.begin(SLAVE_ADDR);    // Initiate the Wire library and join the I2C bus
 
   Wire.onRequest(wireRequestEvent); // Register a function to be called when a master requests data from this slave device.
   Serial.println(F("Wire library initialized"));
@@ -143,7 +124,7 @@ void setup()
 
   printpanStampConfig();
 
-  Serial.println(F("panStamp Rx setup() complete"));
+  Serial.println(F("panStamp Rx setup, complete"));
 }  // setup()
 
 //============================================================================
@@ -167,34 +148,53 @@ void loop()
     {
       if (packet.crc_ok && packet.length > 1)
       {
-
         // Copy data from panStamp packet to I2C packet array
-        // Put Master bath data in 1st 7 bytes of I2C packet and guest bath in latter 7 bytes
+        // Put data from both transmiiters in one I2C packet. Master bath first, followed by guest bath.
+        byte checksum = 0;
+        bool checksumPassed;
         switch (packet.data[1])
         {
-          case addrMasterBath:
+          case ADDR_MASTER_BATH:
             Serial.println(F("\nGot packet from Master Bath"));
-            for (int j = 0; j < packetsPerPanStamp; j++)
-            {
-              I2C_Packet[j] = packet.data[j];
-              lastRxSuccess[1] = millis(); // Track time of successful receipt of panStamp data from Master Bath
-            }
+            // Veify checksum
+            for (int k = 0; k < DATA_LENGTH - 1; k++)
+            { checksum += packet.data[k]; }
+            checksumPassed = ( checksum == packet.data[DATA_LENGTH - 1] );
+            for (int j = 0; j < DATA_LENGTH; j++)
+            { I2C_Packet[j] = packet.data[j]; }
+            
+            if ( checksumPassed )
+            { lastRxSuccess[1] = millis(); } // Time of successful receipt of panStamp data from Master Bath
+            else
+            { I2C_Packet[1] = PANSTAMP_OFFLINE; } // checksum failed, set Tx Address to indicate panStamp is offline
+            
             blinker(LED_COMM, 1);  // blink LED once to indicate receipt of panStamp packet from Master Bath
             break;
 
-          case addrGuestBath:
+          case ADDR_GUEST_BATH:
             Serial.println(F("\nGot packet from Guest Bath"));
-            for (int j = 0; j < packetsPerPanStamp; j++)
-            {
-              I2C_Packet[j + packetsPerPanStamp] = packet.data[j];
-              lastRxSuccess[2] = millis(); // Track time of successful receipt of panStamp data from Master Bath
-            }
+            // Veify checksum
+            for (int k = 0; k < DATA_LENGTH - 1; k++)
+            { checksum += packet.data[k]; }
+            checksumPassed = ( checksum == packet.data[DATA_LENGTH - 1] );
+
+            for (int j = 0; j < DATA_LENGTH; j++)
+            { I2C_Packet[j + DATA_LENGTH] = packet.data[j]; }
+
+            if ( checksumPassed )
+            { lastRxSuccess[2] = millis(); } // Time of successful receipt of panStamp data from Guest Bath
+            else
+            { I2C_Packet[1 + DATA_LENGTH] = PANSTAMP_OFFLINE; } // checksum failed, set Tx Address to indicate panStamp is offline
+            
             blinker(LED_COMM, 2);  // blink LED twice to indicate receipt of panStamp packet from Guest Bath
             break;
 
           default:
             Serial.print(F("\nGot packet from unknown panStamp Tx ID = "));
             Serial.println(packet.data[1]);
+            I2C_Packet[1] = PANSTAMP_OFFLINE;
+            I2C_Packet[1 + DATA_LENGTH] = PANSTAMP_OFFLINE;
+            break;
 
         }  // switch
 
@@ -222,18 +222,14 @@ void wireRequestEvent()
 
   // If we haven't received any data from the panStamp in a while then
   // set the panStamp Tx byte to indicate it's offline by setting it to 255
-  if ((long)( millis() - lastRxSuccess[1]) > panStampTimeout )    // Master Bath
-  {
-    I2C_Packet[1] = panStampOffline;
-  }
+  if ((long)( millis() - lastRxSuccess[1]) > PANSTAMP_TIMEOUT )    // Master Bath
+  { I2C_Packet[1] = PANSTAMP_OFFLINE; }
 
-  if ((long)( millis() - lastRxSuccess[2]) > panStampTimeout )   // Guest Bath
-  {
-    I2C_Packet[packetsPerPanStamp + 1] = panStampOffline;
-  }
+  if ((long)( millis() - lastRxSuccess[2]) > PANSTAMP_TIMEOUT )   // Guest Bath
+  { I2C_Packet[DATA_LENGTH + 1] = PANSTAMP_OFFLINE; }
 
   // Send byte array from panStamp. Main Arduino will decode bytes
-  Wire.write(I2C_Packet, numTransmitters * packetsPerPanStamp);
+  Wire.write(I2C_Packet, NUM_TX * DATA_LENGTH);
 
 } // wireRequestEvent()
 

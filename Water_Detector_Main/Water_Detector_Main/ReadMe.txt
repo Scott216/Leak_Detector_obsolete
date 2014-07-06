@@ -23,19 +23,12 @@ Leonardo D2 (SDA), D3 (SCL)
 4.7k pullup resistors to 3v
 
 
-I2C Data packet 
-== Master Bath ==
+I2C Data packet
 byte 0: panStamp Rx ID
 byte 1: panStamp Tx ID
 byte 2: Wet/Dry Status. Wet = true, Dry = false
 byte 3-4: ADC Temperature from TMP36
 Byte 5-6: ADC value for battery voltage
-
-== Guest Bath ==
-byte 7: panStamp Rx ID
-byte 8: panStamp Tx ID
-byte 9: Wet/Dry Status
-byte 10-11: ADC Temperature from TMP36
-Byte 12-13: ADC value for battery voltage
-
+Byte 7-8: Spare
+Byte 9: checksum
 
