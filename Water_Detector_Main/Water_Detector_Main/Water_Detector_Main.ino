@@ -1,34 +1,40 @@
 // See Readme.txt file
 // directory cd Dropbox/Arduino/Water_Detector/ 
 // Uses Leonardo
-
+// Not much memory left 
 /*  
 To do:
+Make a class library
+setupNTPTime() always returns true, see if you can return actual state of ethernet connection
 
-
-Rev history
-v2.00 05/28/14 - Changed low temp alarm logic so it only sends low temp tweet if voltage > 2500 mA.  Get false alarms when 
+Change Log
+05/28/14 v2.00 - Changed low temp alarm logic so it only sends low temp tweet if voltage > 2500 mA.  Get false alarms when
                  voltage is below this
-v2.01 06/27/14 - Updated tx offline message to display hrs or sec depending on how long it was offline.  Fixed 
+06/27/14 v2.01 - Updated tx offline message to display hrs or sec depending on how long it was offline.  Fixed
                  updateOledDisplay so Tx offline messages would display
-v2.02 07/04/14 - Added checksum to data packet, renamed some constants
-v2.03 07/05/14 - Changed NTP update. It was updating every time you checked sensors and every 48 hours.  Changed to check once a minutes 
+07/04/14 v2.02 - Added checksum to data packet, renamed some constants
+07/05/14 v2.03 - Changed NTP update. It was updating every time you checked sensors and every 48 hours.  Changed to check once a minutes
+07/30/14 v2.04 - Added ability to print version if a "v" is typed into serial monitor
+12/18/14 v2.05 - Added return to setupNTPTime().  Made sendNTPpacket() void instead of unsigned long
 
 */
+#define VERSION "v2.05"
+// #define PRINT_DEBUG      // Comment this out to turn off verbose printing
 
-
-#include "Arduino.h"
+// #include "Arduino.h"
 #include <SPI.h>             // Allows you to communicate with SPI devices. See: http://arduino.cc/en/Reference/SPI
 #include <Ethernet.h>        // http://arduino.cc/en/Reference/Ethernet
 #include <Twitter.h>         // http://arduino.cc/playground/Code/TwitterLibrary
 #include <I2C.h>             // http://github.com/rambo/I2C
 #include <Tokens.h>          // Contains Twitter token
-#include <Adafruit_GFX.h>    // http://github.com/adafruit/Adafruit-GFX-Library
-#include <SSD1306_I2C_DSS.h> // For OLED  https://github.com/Scott216/SSD1306_I2C_DSS
+#include <Adafruit_GFX.h>    // For OLED display http://github.com/adafruit/Adafruit-GFX-Library
+#include <SSD1306_I2C_DSS.h> // For OLED display http://github.com/Scott216/SSD1306_I2C_DSS
 #include "Water_Detector_Main_Library.h"    // Include application, user and local libraries
-#include <avr/pgmspace.h>    // Store data in flash.  http://arduino.cc/en/Reference/PROGMEM
+// #include <avr/pgmspace.h>    // Store data in flash.  http://arduino.cc/en/Reference/PROGMEM
 
-// #define PRINT_DEBUG      // Comment this out to turn off verbose printing
+// This gets rid of compiler warning: Only initialized variables can be placed into program memory area
+#undef PROGMEM
+#define PROGMEM __attribute__(( section(".progmem.data") ))
 
 byte mac[] = { 0x90, 0xA2, 0xDA, 0xEF, 0x46, 0x81 };
 byte ip[] =  { 192, 168, 46, 81 };
@@ -75,7 +81,7 @@ bool isAnythingWet =           false;  // Flags if anything is wet
 // Use arrays to hold input status.  Total number of inputs are wired plus wireless sensors
 bool  InputState[NUM_WIRED_SENSORS + NUM_WIRELESS_SENSORS];     // Input reading, HIGH when water is present LOW when it's not
 bool WaterDetect[NUM_WIRED_SENSORS + NUM_WIRELESS_SENSORS];     // Sensor state after delay to make sure it's really wet or dry
-uint32_t weeklyHeartbeatTimer = 0;                               // mS until Sunday at noon, at which time a tweet will go out to verify sketch is still running  static uint8_t TweetCounter;  // prevent tweets from getting to high
+uint32_t weeklyHeartbeatTimer = 0;                              // mS until Sunday at noon, at which time a tweet will go out to verify sketch is still running  static uint8_t TweetCounter;  // prevent tweets from getting to high
 
 // Define typedef structurs for panStamp data from remote sensors.  Typedef definition is in LocalLibrary.h
 RemoteSensorData_t masterBath;
@@ -99,7 +105,7 @@ void software_Reset();
 bool setupNTPTime();
 bool getTime(uint8_t *ntpTime);
 void parseTimePacket(uint8_t *ntpTime);
-unsigned long sendNTPpacket(IPAddress& address);
+void sendNTPpacket(IPAddress& address);
 void updateOledDisplay();
 
 
@@ -125,6 +131,13 @@ Adafruit_SSD1306 display(OLED_RESET);
 //=========================================================================================================================
 void setup ()
 {  
+  Serial.begin(9600);
+  #ifdef PRINT_DEBUG
+    while (!Serial && millis() < 6000) {}  // for Leonardo wait here for a few seconds for serial monitor connection
+    Serial.print(F("Leak Detecter "));
+    Serial.println(VERSION);
+  #endif
+
   // Start I2C communication
   I2c.begin();
   I2c.timeOut(30000);  // set I2C timeout to 30 seconds
@@ -135,14 +148,9 @@ void setup ()
   display.setTextColor(WHITE);
   display.setTextSize(1);
   display.setCursor(0,10);
-  display.println("Leak Detect v2.03");
+  display.print("Leak Detect ");
+  display.println(VERSION);
   display.display();
-
-  Serial.begin(9600);
-  #ifdef PRINT_DEBUG
-    while (!Serial && millis() < 6000) {}  // for Leonardo wait here for a few seconds for serial monitor connection
-    Serial.println(F("Leak Detect v2.03"));
-  #endif
   
   // Initialize Ethernet connection and UDP
   bool EthernetOK = setupNTPTime();
@@ -156,8 +164,8 @@ void setup ()
       weeklyHeartbeatTimer = millis() + getMsUntilSundayNoon(ntpTime);
       #ifdef PRINT_DEBUG
         Serial.print(F("hours until Sunday noon = "));
-        Serial.println(weeklyHeartbeatTimer / (MINUTE * 60UL));
-      #endif
+      #endif  
+      Serial.println(weeklyHeartbeatTimer / (MINUTE * 60UL));
     }
     else
     { 
@@ -179,7 +187,8 @@ void setup ()
   guestBath.lowVoltMsgFlag =  false;
   guestBath.lowTempMsgFlag =  false;
 
-  SendTweet("Leak Detector Restarted v2.02");  // Send startup tweet
+  char tweetMsg[] = "Leak Detector Restarted";
+  SendTweet(tweetMsg);  // Send startup tweet
   
   ProcessSensors();  // Check sensors to see if anything is wet
 
@@ -243,7 +252,13 @@ void loop ()
       weeklyHeartbeatTimer = millis() + getMsUntilSundayNoon(ntpTime); 
     }
   }
-    
+  
+  if ( Serial.available() )
+  {
+    byte serialData = Serial.read();
+    if( serialData == 86 || serialData == 118 )  // Check for upper and lower case V
+    { Serial.print(VERSION); }
+  }
 }  // end loop()
 
 
@@ -497,7 +512,7 @@ bool ReadRFSensors(RemoteSensorData_t* rfsensor, byte panStampID)
     byte checksum = 0;
     for (int k = 0; k < DATA_LENGTH - 1; k++)
     { checksum += panStampData[k + byteOffset]; }
-    if (  panStampData[DATA_LENGTH - 1  + byteOffset] !=  checksum )  // if checksum is on the left, line is always true
+    if (  panStampData[DATA_LENGTH - 1  + byteOffset] !=  checksum )  // SRG if checksum is on the left, condition is always true.  Can't reproduce issue in simplified sketch
     {
       // Checksum failed
       #ifdef PRINT_DEBUG
@@ -750,8 +765,6 @@ void PrintStates()
 void updateOledDisplay()
 { 
   const int dispDelay = 1500;
-//  uint8_t ntpTime[6];
-//  getTime(ntpTime); - SRG I don't think I keed to check NTP time so often
 
   if( masterBath.online == false)
   {
@@ -896,7 +909,7 @@ void software_Reset()
 
 
 //========================================================================================================================
-// start Ethernet and UDP
+// Start Ethernet and UDP
 //========================================================================================================================
 bool setupNTPTime()
 {
@@ -904,6 +917,8 @@ bool setupNTPTime()
   
   Ethernet.begin(mac, ip);
   Udp.begin(localPort);
+  
+  return true;
   
 }  // setupNTPTime()
 
@@ -925,7 +940,7 @@ bool getTime(uint8_t *ntpTime)
   static uint32_t lastNtpTimeCheck = 0;  // Last time NPT was checked
 
   // Don't check NPT time again too quickly
-  if ( (long)(millis() - lastNtpTimeCheck ) < 5000UL )
+  if ( (long)(millis() - lastNtpTimeCheck ) < 5000L )
   { delay(6000); }
   
   lastNtpTimeCheck = millis();
@@ -1037,7 +1052,7 @@ void parseTimePacket(uint8_t *ntpTime)
 //==========================================================================================================================
 // send an NTP request to the time server at the given address
 //==========================================================================================================================
-unsigned long sendNTPpacket(IPAddress& address)
+void sendNTPpacket(IPAddress& address)
 {
   // set all bytes in the buffer to 0
   memset(packetBuffer, 0, NTP_PACKET_SIZE);
@@ -1058,6 +1073,7 @@ unsigned long sendNTPpacket(IPAddress& address)
   Udp.beginPacket(address, 123); //NTP requests are to port 123
   Udp.write(packetBuffer, NTP_PACKET_SIZE);
   Udp.endPacket();
+
 } // sendNTPpacket()
 
 
