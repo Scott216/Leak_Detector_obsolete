@@ -33,6 +33,10 @@
 #include "panstamp.h" // Xcode needs this to compile, arduino IDE does not
 #include <Wire.h>     // http://arduino.cc/it/Reference/Wire
 
+// This gets rid of compiler warning: Only initialized variables can be placed into program memory area
+#undef PROGMEM
+#define PROGMEM __attribute__(( section(".progmem.data") ))
+
 // Two LEDs are used to show panStamp and I2C communication
 #define LED_COMM     4  // Flashes when there is I2C or Panstamp communication
 
