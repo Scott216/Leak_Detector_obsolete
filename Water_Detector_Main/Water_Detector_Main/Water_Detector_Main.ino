@@ -3,9 +3,11 @@
 // Uses Leonardo
 // Not much memory left 
 /*  
+
 To do:
 Make a class library
 setupNTPTime() always returns true, see if you can return actual state of ethernet connection
+
 
 Change Log
 05/28/14 v2.00 - Changed low temp alarm logic so it only sends low temp tweet if voltage > 2500 mA.  Get false alarms when
@@ -16,12 +18,15 @@ Change Log
 07/05/14 v2.03 - Changed NTP update. It was updating every time you checked sensors and every 48 hours.  Changed to check once a minutes
 07/30/14 v2.04 - Added ability to print version if a "v" is typed into serial monitor
 12/18/14 v2.05 - Added return to setupNTPTime().  Made sendNTPpacket() void instead of unsigned long
-
+01/09/15 v2.06 - Renamed constant for RED led output to PIN_ALARM
+01/12/15 v2.07 - Fixed Sunday heartbeat alert, I hope.  Compiled size (v1.0.5) 27,372/28,672 bytes
+02/10/15 v2.08 - Added dehumidifier.  Changed TBD2 to DEHUMIDIFIER
 */
-#define VERSION "v2.05"
+
+
+#define VERSION "v2.08"
 // #define PRINT_DEBUG      // Comment this out to turn off verbose printing
 
-// #include "Arduino.h"
 #include <SPI.h>             // Allows you to communicate with SPI devices. See: http://arduino.cc/en/Reference/SPI
 #include <Ethernet.h>        // http://arduino.cc/en/Reference/Ethernet
 #include <Twitter.h>         // http://arduino.cc/playground/Code/TwitterLibrary
@@ -41,7 +46,7 @@ byte ip[] =  { 192, 168, 46, 81 };
 
 // Analog inputs 0 & 1 are configured as Digitol I/O.
 //      Name              I/O    Description
-#define ISWETOUTPUT         0   // Turns on Red LED and relay
+#define PIN_ALARM           0   // Turns on red LED and relay
 #define OLED_RESET          1
 // Reserved                 2      I2C
 // Reserved                 3      I2C
@@ -51,8 +56,8 @@ byte ip[] =  { 192, 168, 46, 81 };
 #define HOTTUBBACK          7   // Sponge in crawlspace behind hot tub
 #define WATERTANK           8   // Sponge in crawlspace corner by water tank
 #define KITCHENSINK         9   // Sponge under kitchen sink
-// reserved                10      Slave select
-#define TBD2               11   // Future use
+// reserved                10   // Slave select
+#define DEHUMIDIFIER       11   // Dehumidifier
 #define TBD1               12   // Future Use
 #define WATERHEATER        A0   // Sponge under hot water heater
 #define BOILER             A1   // Sponge next to boiler
@@ -91,7 +96,7 @@ RemoteSensorData_t guestBath;
 Twitter twitter(TWITTER_TOKEN);
 
 // Put input pin numbers in array so you can use loops to read wired inputs
-int InputPinNum[] = { FIRSTFLOORBRSINK, WASHINGMACH, TBD1, TBD2, WATERHEATER, BOILER, FRIG, DISHWASHER, KITCHENSINK, HOTTUBFILTER, HOTTUBBACK, WATERTANK };
+int InputPinNum[] = { FIRSTFLOORBRSINK, WASHINGMACH, TBD1, DEHUMIDIFIER, WATERHEATER, BOILER, FRIG, DISHWASHER, KITCHENSINK, HOTTUBFILTER, HOTTUBBACK, WATERTANK };
 
 
 // Function Prototypes
@@ -164,8 +169,8 @@ void setup ()
       weeklyHeartbeatTimer = millis() + getMsUntilSundayNoon(ntpTime);
       #ifdef PRINT_DEBUG
         Serial.print(F("hours until Sunday noon = "));
+        Serial.println(weeklyHeartbeatTimer / (MINUTE * 60UL));
       #endif  
-      Serial.println(weeklyHeartbeatTimer / (MINUTE * 60UL));
     }
     else
     { 
@@ -178,8 +183,8 @@ void setup ()
   
   for(int i = 0; i < NUM_WIRED_SENSORS; i++)
   { pinMode(InputPinNum[i], INPUT); }
-  pinMode(ISWETOUTPUT, OUTPUT);  // Red LED and reed relay
-  digitalWrite(ISWETOUTPUT, LOW);
+  pinMode(PIN_ALARM, OUTPUT);  // Alarm output: red LED and reed relay
+  digitalWrite(PIN_ALARM, LOW);
   
   // Initialiaze one shot triggers for messages
   masterBath.lowVoltMsgFlag = false;
@@ -227,7 +232,12 @@ void loop ()
     sprintf_P(tweetMsg, PSTR("Leak Detector: Guest Bath = %d mV"), guestBath.volts);
     SendTweet(tweetMsg);
     
-    weeklyHeartbeatTimer =  millis() + (MINUTE * 60UL * 24UL * 7UL); // add 1 week to heartbeat timer
+    // Add 1 week to heartbeat timer
+    if( getTime(ntpTime) )
+    { weeklyHeartbeatTimer = millis() + getMsUntilSundayNoon(ntpTime); }
+    else
+    { weeklyHeartbeatTimer =  millis() + (MINUTE * 60UL * 24UL * 7UL); }  // couldn't refresh NTP time, just add 1 week of mS
+    
 
     #ifdef PRINT_DEBUG
       PrintStates();
@@ -241,16 +251,13 @@ void loop ()
     if( WaterDetect[i] == WET )
     { wetOutputState = HIGH; }
   }    
-  digitalWrite(ISWETOUTPUT, wetOutputState);  // turn on Red LED and Relay if anything is wet
+  digitalWrite(PIN_ALARM, wetOutputState);  // turn on red LED and relay if anything is wet
 
   // Check NTP timer
   if( (long)( millis() -  checkNtpTimer) > 0 )
   {
     if( getTime(ntpTime) )
-    {  
-      checkNtpTimer = millis() + MINUTE;
-      weeklyHeartbeatTimer = millis() + getMsUntilSundayNoon(ntpTime); 
-    }
+    { checkNtpTimer = millis() + MINUTE; }
   }
   
   if ( Serial.available() )
@@ -591,7 +598,7 @@ void SendAlert(byte SensorArrayPosition, bool IsWet)
       strcat_P(alertMsg, PSTR("TBD1"));
       break;
     case 3:
-      strcat_P(alertMsg, PSTR("TBD2"));
+      strcat_P(alertMsg, PSTR("Dehumidifier"));
       break;
     case 4:
       strcat_P(alertMsg, PSTR("Water Heater"));
@@ -828,7 +835,7 @@ void updateOledDisplay()
             display.println("TBD1");
             break;
           case 3: 
-            display.println("TBD2");
+            display.println("DEHUMIDIFIER");
             break;
           case 4: 
             display.println("WATER HEATER");
@@ -895,6 +902,7 @@ uint32_t getMsUntilSundayNoon(uint8_t *ntpTime)
   
   // 43200000 = mS in 12 hours - this moves time from midnight to noon on Sunday
   return ((daysToSunday * 86400000UL) + mStoMidnight + 43200000UL);
+  
 } // getMsUntilSundayNoon()
 
 
