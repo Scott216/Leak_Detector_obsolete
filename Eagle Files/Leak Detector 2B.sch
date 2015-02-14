@@ -7276,14 +7276,14 @@ D6 - Hot Tub Pump
 D7 - Hot Tub Rear
 D8 - Water tank in corner
 D9 - Kitchen Sink
-D12 - spare
+D10 - spare
 D11 - spare
 
 PanStamp Pinout
 D4 - LED PanStamp Rx 
 A4 - I2C
 A5 - I2C</text>
-<text x="55.88" y="243.84" size="5.08" layer="97" font="vector">Leak Detector v3
+<text x="55.88" y="243.84" size="5.08" layer="97" font="vector">Leak Detector V2
 PCB is designed to fit in OKW enclosure B6504112</text>
 <text x="137.16" y="78.74" size="1.778" layer="97">OLED Display</text>
 <text x="228.6" y="88.9" size="1.778" layer="97">Reed Relay</text>
@@ -7295,8 +7295,7 @@ power LED</text>
 RX  LED</text>
 <text x="247.65" y="155.956" size="1.4224" layer="97">For Red Water
 Warning LED</text>
-<text x="-86.36" y="254" size="2.1844" layer="97">To Do:
-Add reverse polarity protection on input volts</text>
+<text x="-96.52" y="43.18" size="1.778" layer="97">Don't use D10, it's needed as SS for Ethernet</text>
 </plain>
 <instances>
 <instance part="IC2" gate="A" x="45.72" y="195.58"/>
@@ -7346,7 +7345,7 @@ Add reverse polarity protection on input volts</text>
 <instance part="U$2" gate="G$1" x="170.18" y="116.84"/>
 <instance part="GND25" gate="1" x="152.4" y="134.62" rot="R180"/>
 <instance part="GND26" gate="1" x="228.6" y="137.16"/>
-<instance part="GND28" gate="1" x="259.08" y="195.58"/>
+<instance part="GND28" gate="1" x="236.22" y="195.58"/>
 <instance part="GND30" gate="1" x="248.92" y="63.5"/>
 <instance part="P+2" gate="1" x="223.52" y="66.04" rot="MR270"/>
 <instance part="RN1" gate="A" x="-35.56" y="213.36"/>
@@ -7482,7 +7481,7 @@ Add reverse polarity protection on input volts</text>
 <segment>
 <pinref part="U$1" gate="G$1" pin="GND"/>
 <pinref part="GND28" gate="1" pin="GND"/>
-<wire x1="226.06" y1="198.12" x2="259.08" y2="198.12" width="0.1524" layer="91"/>
+<wire x1="226.06" y1="198.12" x2="236.22" y2="198.12" width="0.1524" layer="91"/>
 </segment>
 <segment>
 <pinref part="GND30" gate="1" pin="GND"/>
@@ -8051,6 +8050,11 @@ Add reverse polarity protection on input volts</text>
 <wire x1="226.06" y1="187.96" x2="231.14" y2="187.96" width="0.1524" layer="91"/>
 <label x="231.14" y="187.96" size="1.778" layer="95" xref="yes"/>
 </segment>
+<segment>
+<wire x1="53.34" y1="129.54" x2="58.42" y2="129.54" width="0.1524" layer="91"/>
+<label x="58.42" y="129.54" size="1.778" layer="95" xref="yes"/>
+<pinref part="IC2" gate="C" pin="OUT"/>
+</segment>
 </net>
 <net name="D11" class="0">
 <segment>
@@ -8069,18 +8073,6 @@ Add reverse polarity protection on input volts</text>
 <pinref part="ON-OFF" gate="G$1" pin="1"/>
 <pinref part="TB2B" gate="-1" pin="KL"/>
 <wire x1="180.34" y1="81.28" x2="187.96" y2="81.28" width="0.1524" layer="91"/>
-</segment>
-</net>
-<net name="D12" class="0">
-<segment>
-<pinref part="U$1" gate="G$1" pin="D12"/>
-<wire x1="226.06" y1="193.04" x2="231.14" y2="193.04" width="0.1524" layer="91"/>
-<label x="231.14" y="193.04" size="1.778" layer="95" xref="yes"/>
-</segment>
-<segment>
-<wire x1="53.34" y1="129.54" x2="58.42" y2="129.54" width="0.1524" layer="91"/>
-<label x="58.42" y="129.54" size="1.778" layer="95" xref="yes"/>
-<pinref part="IC2" gate="C" pin="OUT"/>
 </segment>
 </net>
 </nets>
