@@ -1,13 +1,14 @@
 /*
 panStamp Tx for Water detector.  
+Compile on IDE 1.0.x
 When uploading sketch be sure to uncomment the right #define depending on whether this is master bath or guest bath
-  
-Change Log:
-v2.00  07/04/14 - Made ledColor an enum, added spare data field and checksum
-
+ 
+To Do:
+Add 3rd wireless sensor for downstairs bathroom
+Update sketch to work with latest panStamp API
  
 
-Changes for v2 PCB
+Changes for PCB
  Use square RGB Led, sparkfun COM-11679
  Move batteries .08" up
  put Led to the right of status pushbutton
@@ -17,13 +18,12 @@ Changes for v2 PCB
  Use bigger wirepads for probes that go into the sponge
  
 Inputs:
-Wet/Dry status from sponge
-Temperature from OneWire DS18B20
-Status button - when pressed LED will display status
+ Wet/Dry status from sponge
+ Temperature from OneWire DS18B20
+ Status button - when pressed RGB LED will display status
 
 Outputs:
-3 PWM for RGB LED
-
+ 3 PWM for RGB LED
 
 Data to Transmit (10 bytes):
 byte 0: Rx ID - ID of panStamp we are sending data too
@@ -36,10 +36,7 @@ Byte 9: Checksum
  
 panStamp will sleep for 8 second, sleepWd(), wake up and transmit data, about 0.4 seconds, then repeat.
 Average current draw is 1mA (about 20mA when awake and 0.009 mA when asleep)
-One CR123 battery should last 2 months
-
-For temperature sensor, use a TMP36.  It only draws 0.05mA.
-Pinout: http://learn.adafruit.com/system/assets/assets/000/000/471/small360/tmp36pinout.gif?1340740328
+CR123 batteries will last several months
 
 
 === I/O ===
@@ -50,13 +47,18 @@ D6 - Status LED, Red, PWM
 D8 - 1Wire temperature sensor input
 D9 - Status button input
 
- */
+
+Change Log:
+07/04/14 v2.00 - Made ledColor an enum, added spare data field and checksum
+
+ 
+*/
 
 // Comment out all but one DEVICE_xxx.  This sets the devide ID for the panStamp
-//#define DEVICE_MASTER_BATH   // gray antenna
-#define DEVICE_GUEST_BATH  // orange anteanna
+//#define DEVICE_MASTER_BATH  
+#define DEVICE_GUEST_BATH 
 
-#include <Arduino.h>
+//#include <Arduino.h>
 #include "EEPROM.h"              // panStamp address is saved to EEPROM http://www.arduino.cc/en/Reference/EEPROM
 #include "cc1101.h"              // http://code.google.com/p/panstamp/source/browse/trunk/arduino/libraries/panstamp/cc1101.h
 #include "panstamp.h"            // http://code.google.com/p/panstamp/source/browse/trunk/arduino/libraries/panstamp/panstamp.h
@@ -68,7 +70,7 @@ D9 - Status button input
 #define WET LOW    // When digital input from sponge/Op-Amp is LOW, the sponge is wet
 #define TEMPERATURE_PRECISION 9
 
-byte const LED_RED_PIN =         6; // RGB LED
+byte const LED_RED_PIN =         6;  // RGB LED
 byte const LED_GRN_PIN =         5;
 byte const LED_BLU_PIN =         3;
 byte const STATUS_BTN_PIN =      9;  // Status pushbutton input
