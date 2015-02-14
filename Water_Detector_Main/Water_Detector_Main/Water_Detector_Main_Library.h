@@ -53,15 +53,15 @@ class Wireless : public WaterSensor
 public:
   Wireless(int TransmitterID);  // constructor
   ~Wireless();
-  int getTemperature();
+  int   getTemperature();
   float getVolts();
-  bool isOnline();
+  bool  isOnline();
   
 private:
-  int _temperature;
+  int   _temperature;
   float _batteryVolts;
-  bool _isOnline;
-  int _transmitterID;
+  bool  _isOnline;
+  int   _transmitterID;
   
 };
 
