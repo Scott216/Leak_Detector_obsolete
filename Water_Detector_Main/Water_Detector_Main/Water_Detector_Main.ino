@@ -6,6 +6,7 @@
 
 To do:
 Make a class library
+Add wireless sensor for downstairs bathroom
 setupNTPTime() always returns true, see if you can return actual state of ethernet connection
 
 
@@ -20,11 +21,12 @@ Change Log
 12/18/14 v2.05 - Added return to setupNTPTime().  Made sendNTPpacket() void instead of unsigned long
 01/09/15 v2.06 - Renamed constant for RED led output to PIN_ALARM
 01/12/15 v2.07 - Fixed Sunday heartbeat alert, I hope.  Compiled size (v1.0.5) 27,372/28,672 bytes
-02/10/15 v2.08 - Added dehumidifier.  Changed TBD2 to DEHUMIDIFIER
+02/10/15 v2.08 - Added dehumidifier.  Changed TBD2 to DEHUMIDIFIER.  Size (IDE 1.0.5) 27,390 / 28,672 bytes
+02/14/15 v2.09 - Removed printStates().  Size (IDE 1.0.5) 27,276 / 28,672 bytes
 */
 
 
-#define VERSION "v2.08"
+#define VERSION "v2.09"
 // #define PRINT_DEBUG      // Comment this out to turn off verbose printing
 
 #include <SPI.h>             // Allows you to communicate with SPI devices. See: http://arduino.cc/en/Reference/SPI
@@ -35,7 +37,7 @@ Change Log
 #include <Adafruit_GFX.h>    // For OLED display http://github.com/adafruit/Adafruit-GFX-Library
 #include <SSD1306_I2C_DSS.h> // For OLED display http://github.com/Scott216/SSD1306_I2C_DSS
 #include "Water_Detector_Main_Library.h"    // Include application, user and local libraries
-// #include <avr/pgmspace.h>    // Store data in flash.  http://arduino.cc/en/Reference/PROGMEM
+
 
 // This gets rid of compiler warning: Only initialized variables can be placed into program memory area
 #undef PROGMEM
@@ -104,7 +106,6 @@ bool ReadRFSensors(RemoteSensorData_t* rfsensor, byte panStampID);
 void SendAlert(byte SensorArrayPosition, bool IsWet);
 void ProcessSensors(void);
 int  SendTweet(char msgTweet[]);
-void PrintStates();
 uint32_t getMsUntilSundayNoon(uint8_t *ntpTime);  // mS until Sunday noon - for weeklyheartbeat timer
 void software_Reset();
 bool setupNTPTime();
@@ -239,9 +240,6 @@ void loop ()
     { weeklyHeartbeatTimer =  millis() + (MINUTE * 60UL * 24UL * 7UL); }  // couldn't refresh NTP time, just add 1 week of mS
     
 
-    #ifdef PRINT_DEBUG
-      PrintStates();
-    #endif
   }  // end weekly heartbeat
 
   // If anything is wet, turn on LED and relay (they are on the same output
@@ -418,17 +416,7 @@ void ProcessSensors()
   {
     if((InputState[i] == WET) && (isWet[i] == DRY ))
     {
-      #ifdef PRINT_DEBUG
-        PrintStates();
-      #endif
-      
       isWet[i] = WET;
-      
-      #ifdef PRINT_DEBUG
-        Serial.print(F("Water detected ID: "));
-        Serial.println(i);
-        PrintStates();
-      #endif
       
       // Set time to check again to make sure it's really wet
       DoubleCheckTime[i] = millis() + DOUBLE_CHECK_DELAY;
@@ -443,9 +431,6 @@ void ProcessSensors()
     {
       WaterDetect[i] = WET;  // Sponge is still wet after delay
       SendAlert(i , WET);    // One of the inputs is still wet after DOUBLE_CHECK_DELAY.  Send Tweet out
-      #ifdef PRINT_DEBUG
-        PrintStates();
-      #endif
      }
   } // End double check for wet sponge
   
@@ -466,12 +451,7 @@ void ProcessSensors()
     if( (isWet[i] == DRY) && (WaterDetect[i] == WET) && ((long)(millis() - WetToDryDelay[i]) >= 0))
     {
       // Sensor went from Wet To Dry
-      #ifdef PRINT_DEBUG
-        PrintStates();
-      #endif
-      
       WaterDetect[i] = DRY;
-      
       SendAlert(i, DRY);
     }
   } // End Wet to Dry
@@ -699,69 +679,6 @@ int SendTweet(char msgTweet[])
  
 } // SendTweet()
 
-
-//=========================================================================================================================
-// Print states of all the sensors - remove when debugging isn't needed
-//=========================================================================================================================
-void PrintStates()
-{
-  int totalInputs = NUM_WIRED_SENSORS + NUM_WIRELESS_SENSORS;
-  
-  Serial.print(F("\nInputState\t"));
-  for(int i = 0; i < totalInputs; i++)
-  {
-    Serial.print(InputState[i]);
-    Serial.print("\t");
-  }
-  Serial.println();
-//  Serial.print(F("WetFlag    \t"));
-//  for(int i = 0; i < totalInputs; i++)
-//  {
-//    Serial.print(isWet[i]);
-//    Serial.print("\t");
-//  }
-//  Serial.println();
-
-  Serial.print(F("WaterDetect\t"));
-  for(int i = 0; i < totalInputs; i++)
-  {
-    Serial.print(WaterDetect[i]);
-    Serial.print("\t");
-  }
-  Serial.println();
-  
-  if (masterBath.online)
-  {
-    Serial.println(F("\t\tIsWet\tTemp\tVolts"));
-    Serial.print(F("Master Bath"));
-    Serial.print("\t");
-    Serial.print(masterBath.IsWet);
-    Serial.print("\t");
-    Serial.print(masterBath.temp);
-    Serial.print("\t");
-    Serial.println(masterBath.volts);
-  }
-  else
-  {
-    Serial.println(F("Master Bath is offline"));
-  }
-  
-  if(guestBath.online)
-  {
-    Serial.print("Guest Bath");
-    Serial.print("\t");
-    Serial.print(guestBath.IsWet);
-    Serial.print("\t");
-    Serial.print(guestBath.temp);
-    Serial.print("\t");
-    Serial.println(guestBath.volts);
-  }
-  else
-  {
-    Serial.println(F("Guest Bath is offline"));
-  }
-
-} // End PrintStates()
 
 
 //=========================================================================================================================
