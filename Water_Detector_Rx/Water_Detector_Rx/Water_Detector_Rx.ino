@@ -1,16 +1,22 @@
 /*
- panStamp Rx sketch for water detectors
+ This receiver listens for data coming from the wireless leak detector transmitters.  This sketch sends wireless
+ data to the main Arduino via I2c.
  
- v2.00 07/04/14 - added checksum to panStamp and I2C data
+ IDE 1.6.x
+ Board: panStamp AVR
+
  
- To Do:
- How to handle if one panStamp Tx is working and one is not. lastRxSuccess will not timeout and non-working
- panStamp data will stay in array
+Link to panStamp libraries on GitHub: http://git.io/pkhC
+Link to panStamp Wiki, API section: http://github.com/panStamp/panstamp/wiki/panStamp-API
 
 
- Remote panStamp/Sponge sensors send data to this reciever.
- This panStamp communicates with main Arduino via I2C. The panStamp is the I2C slave, main Arduino is Master
+Forum question about new api
+http://www.panstamp.org/forum/showthread.php?tid=4044
 
+
+ 
+To Do:
+Use array for struct WirelessWaterDetector
 
  panStamp data received:
  byte 0:   panStamp Rx ID
@@ -25,111 +31,106 @@
  bytes 0-9: Master Bath
  bytes 10-19: Guest Bath
 
- */
+ 
+Change Log
+07/04/14  v2.00 - added checksum to panStamp and I2C data
+02/24/15  v2.01 - add first floor bathroom, use stuct to hold data
+03/07/15  v2.02 - Upgraded to latest panStamp API 
+*/
 
-#include "Arduino.h"
-#include "EEPROM.h"   // http://www.arduino.cc/en/Reference/EEPROM
-#include "cc1101.h"   // http://code.google.com/p/panstamp/source/browse/trunk/arduino/libraries/panstamp/cc1101.h
-#include "panstamp.h" // Xcode needs this to compile, arduino IDE does not
-#include <Wire.h>     // http://arduino.cc/it/Reference/Wire
+#define VERSION "2.02"
+
+#include <Arduino.h> 
+#include <HardwareSerial.h>  // Required by IDE 1.6.x
+#include <EEPROM.h>          // http://www.arduino.cc/en/Reference/EEPROM
+#include <Wire.h>            // http://arduino.cc/it/Reference/Wire
 
 // This gets rid of compiler warning: Only initialized variables can be placed into program memory area
 #undef PROGMEM
 #define PROGMEM __attribute__(( section(".progmem.data") ))
 
 // Two LEDs are used to show panStamp and I2C communication
-#define LED_COMM     4  // Flashes when there is I2C or Panstamp communication
+#define LED_RX_DATA     4  // Flashes when there is I2C or Panstamp communication
 
 
-// The networkAdress of panStamp sender and receiver must be the same
-byte panStampNetworkAdress =    46;   // Network address for all Water Detector panStamps (can't be a const varialbe)
-byte receiverAddress =          99;   // Device address of this panStamp (can't be a const variable)
-const byte SLAVE_ADDR =         21;   // I2C Slave address of this device
-const byte DATA_LENGTH =        10;  // Packets sent by each panstamp
-const byte ADDR_MASTER_BATH =    1;  // panStamp device address for 2nd floor master bath
-const byte ADDR_GUEST_BATH =     2;  // panStamp device address for 2nd floor guest bath
-const byte NUM_TX =              2;  // number of panStamp transmitters on this network
-const byte PANSTAMP_OFFLINE =  255;  // Send this to I2C master in the panStamp Tx address to indicate panStamp is offline
-const uint32_t PANSTAMP_TIMEOUT = 120000; // 2 minute timeout for panStamps
+// I2C Config
+const byte I2C_ADDR_SLAVE =                21;  // I2C Slave address of this device
+const byte I2C_DATA_LENGTH =               10;  // Bytes in I2C packet
+const byte CHECKSUM_I2C = I2C_DATA_LENGTH - 1;  // checksum is the last byte in array
+byte g_I2C_Packet[I2C_DATA_LENGTH];             // Array to hold data sent over I2C to main Arduino
 
-byte I2C_Packet[NUM_TX *  DATA_LENGTH];   // Array to hold data sent over I2C to main Arduino
-uint32_t lastRxSuccess[3];        // miliseconds since last successful receipt of panStamp data.  Arrary starrts at 1
+// panStamp config
+const     byte g_pS_Channel =                 0;  // panStamp RF channel
+          byte g_pS_Address_Network[] = {46, 0};  // panStamp network address, aka SyncWord. All Tx and Receiver must be the same address
+const     byte g_pS_Address_Rx =             99;  // receiver address of this panStamp
+          byte g_lastTxToSendData =           0;  // Address of the most recent wireless transmitter that sent data
+const     byte DATA_LENGTH_PS =              10;  // Bytes in panStamp packet
+const     byte CHECKSUM_PS = DATA_LENGTH_PS - 1;  // Checksum is last byte in packet array 
+const uint32_t PANSTAMP_TIMEOUT =        120000;  // 2 minute timeout for panStamps
+
+     
+const byte ADDR_BATH_MASTER =  1;  // panStamp device address for 2nd floor master bath
+const byte ADDR_BATH_GUEST =   2;  // panStamp device address for 2nd floor guest bath
+const byte ADDR_BATH_FIRST =   3;  // panStamp device address for 1st floor bathroom
 
 
-CCPACKET packet;  // panStamp data http://code.google.com/p/panstamp/source/browse/trunk/arduino/libraries/panstamp/ccpacket.h
+// Create sturcture to hold info on remote wireless water detectors
+struct WirelessWaterDetector
+{
+  bool     isOnline;         // true if transmitter is sendign data
+  uint8_t  addressTx;        // Transmitter address
+  bool     isWet;            // is sponge wet
+  int16_t  tempF;            // temperature 
+  uint16_t millivolts;       // battery volts in millivolts
+  uint32_t lastRxTimestamp;  // timestamp of last received packet
+  byte     rssi;             // signal strength
+  byte     lqi;              // link quality index
+};
+
+struct WirelessWaterDetector g_bathFirstFloor;
+struct WirelessWaterDetector g_bathMaster;
+struct WirelessWaterDetector g_bathGuest;
+struct WirelessWaterDetector g_unknownSensor;
+
+volatile boolean g_pSpacketAvailable = false;  // Flag that a wireless packet has been received
+            byte g_TxAddress_Requested =   0;  // Address of remote transmitter the I2C master is requesting
 
 
-
-// The connection to the hardware chip CC1101 the RF Chip
-CC1101 cc1101;  //http://code.google.com/p/panstamp/wiki/CC1101class
-
-// a flag that a wireless packet has been received
-boolean packetAvailable = false;
-
-// Function prototype
+// Function prototypes
 void printpanStampConfig();
-void printSensorValues();
 void wireRequestEvent();
+void radioSignalInterrupt();
+void printSensorValues(WirelessWaterDetector& psPkt);
 
-
-//============================================================================
-// Blink LED cnt times
-//============================================================================
-void blinker(int LED, int cnt)
-{
-  for(int j=1; j<=cnt; j++)
-  {
-    digitalWrite(LED, HIGH);
-    delay(50);
-    digitalWrite(LED, LOW);
-    delay(50);
-  }
-}  // blinker()
-
-//================================================================================================================================================================================
-// Handle interrupt from CC1101 (INT 0)
-//================================================================================================================================================================================
-void cc1101signalsInterrupt(void)
-{
-  // set the flag that a package is available
-  packetAvailable = true;
-} // cc1101signalsInterrupt()
 
 //============================================================================
 //============================================================================
 void setup()
 {
   Serial.begin(9600);
-  Serial.println(F("Begin panStamp Rx setup, v2.00"));
-
-  pinMode(LED_COMM, OUTPUT);  // Yellow LED
-  digitalWrite(LED_COMM, HIGH);
+  Serial.print(F("\n\rBegin panStamp Rx setup\n\rVersion "));
+  Serial.println(VERSION);
+  
+  pinMode(LED_RX_DATA, OUTPUT);  // Yellow LED on panel to indicate Rx data received
+  digitalWrite(LED_RX_DATA, HIGH);
   delay(500);
-  digitalWrite(LED_COMM, LOW);
+  digitalWrite(LED_RX_DATA, LOW);
 
-  Wire.begin(SLAVE_ADDR);    // Initiate the Wire library and join the I2C bus
+  Wire.begin(I2C_ADDR_SLAVE);              // Initiate the Wire library and join the I2C bus
+  Wire.onRequest(wireRequestEvent);        // Register a function to be called when I2C master requests data from this slave device.
+  Wire.onReceive(wireGetAddressEvent);     // This function is called when I2C master tells slave which data it wants.  Master sends the address of the wireless transmitter it wants
+  Serial.println(F("I2C initialized\n\r"));
 
-  Wire.onRequest(wireRequestEvent); // Register a function to be called when a master requests data from this slave device.
-  Serial.println(F("Wire library initialized"));
-
-  cc1101.init(); // initialize the RF Chip in panStamp
-
-  cc1101.setSyncWord(&panStampNetworkAdress, false);  // Set network address (pointer), false parameter tells function not to save to EEPROM
-
-  // this receiverAddress needs to match the receiverAddress in the Tx panStamp
-  cc1101.setDevAddress(receiverAddress, false);  // false parameter tells function not to save to EEPROM
-  cc1101.enableAddressCheck(); // you can skip this line, because the default is to have the address check enabled
-
-  // Set this panStamp to be a receiver
-  cc1101.setRxState();
-
-  // Enable wireless reception interrupt
-  attachInterrupt(0, cc1101signalsInterrupt, FALLING);
-
+  // Setup the panStamp radio
+  panstamp.radio.setChannel(g_pS_Channel);             // panStamp Channel
+  panstamp.radio.setSyncWord(g_pS_Address_Network);    // Set network address. Has to be the same for all panStamps on this network
+  panstamp.radio.setDevAddress(g_pS_Address_Rx);       // Address of this panStamp
+  panstamp.setPacketRxCallback(radioSignalInterrupt);  // Declare radio callback function which runs every time panStamp RF data comes in
   printpanStampConfig();
+  Serial.println(F("panStamp Rx setup complete\n\r"));
 
-  Serial.println(F("panStamp Rx setup, complete"));
-}  // setup()
+}  // end setup()
+
 
 //============================================================================
 // Get data from panStamps and put into I2C packet.
@@ -138,82 +139,96 @@ void setup()
 //============================================================================
 void loop()
 {
-
-  // Get data from remote panStamps on 2nd floor
-  if(packetAvailable)
+  // Get data from remote wirelesss water detectors
+  if(g_pSpacketAvailable)
   {
-    // clear the flag
-    packetAvailable = false;
-
-    // Disable wireless reception interrupt so this code finishes executing without inturruption
-    detachInterrupt(0);
-
-    if(cc1101.receiveData(&packet) > 0)
+    g_pSpacketAvailable = false;  // reset flag
+    blinker(LED_RX_DATA, 1);  // blink LED once to indicate receipt of wireless data
+    switch (g_lastTxToSendData)
     {
-      if (packet.crc_ok && packet.length > 1)
+      case ADDR_BATH_MASTER:
+        printSensorValues(g_bathMaster);  // Print packet data
+        break;
+      case ADDR_BATH_GUEST:
+        printSensorValues(g_bathGuest);  // Print packet data
+        break;
+      case ADDR_BATH_FIRST:
+        printSensorValues(g_bathFirstFloor);  // Print packet data
+        break;
+      default:
+        Serial.print(F("packet from unknown Tx addr = "));
+        Serial.println(g_lastTxToSendData);
+        printSensorValues(g_unknownSensor);  // Print packet data
+        break;
+    }
+ 
+  }  // packet available
+
+} // end loop()
+
+
+//============================================================================
+// Function runs when panStamp data comes in
+//============================================================================
+void radioSignalInterrupt(CCPACKET *psPacket)
+{
+  if (psPacket->length == DATA_LENGTH_PS)
+  {
+    struct WirelessWaterDetector *ptr_WirelessSensor;  // switch-case below will choose which instance of the structer the data is loaded into
+    
+    // Validate data with checksum.  
+    byte checksum = 0;
+    for (int cs = 0; cs < CHECKSUM_PS; cs++)
+    { checksum += psPacket->data[cs]; }
+    bool checksumPassed = ( checksum == psPacket->data[CHECKSUM_PS] );
+   
+    // If data is okay, then put it into the structure
+    if ( checksumPassed )
+    {
+      g_pSpacketAvailable = true;  // set the flag indicating new packet came in
+      
+      g_lastTxToSendData = psPacket->data[1];
+      switch (g_lastTxToSendData)
       {
-        // Copy data from panStamp packet to I2C packet array
-        // Put data from both transmiiters in one I2C packet. Master bath first, followed by guest bath.
-        byte checksum = 0;
-        bool checksumPassed;
-        switch (packet.data[1])
-        {
-          case ADDR_MASTER_BATH:
-            Serial.println(F("\nGot packet from Master Bath"));
-            // Veify checksum
-            for (int k = 0; k < DATA_LENGTH - 1; k++)
-            { checksum += packet.data[k]; }
-            checksumPassed = ( checksum == packet.data[DATA_LENGTH - 1] );
-            for (int j = 0; j < DATA_LENGTH; j++)
-            { I2C_Packet[j] = packet.data[j]; }
-            
-            if ( checksumPassed )
-            { lastRxSuccess[1] = millis(); } // Time of successful receipt of panStamp data from Master Bath
-            else
-            { I2C_Packet[1] = PANSTAMP_OFFLINE; } // checksum failed, set Tx Address to indicate panStamp is offline
-            
-            blinker(LED_COMM, 1);  // blink LED once to indicate receipt of panStamp packet from Master Bath
-            break;
+        case ADDR_BATH_MASTER:
+          ptr_WirelessSensor = &g_bathMaster;
+          break;
+        case ADDR_BATH_GUEST:
+          ptr_WirelessSensor = &g_bathGuest;
+          break;
+        case ADDR_BATH_FIRST:
+          ptr_WirelessSensor = &g_bathFirstFloor;
+          break;
+        default:
+          ptr_WirelessSensor = &g_unknownSensor;
+          break;
+      }  // end switch
 
-          case ADDR_GUEST_BATH:
-            Serial.println(F("\nGot packet from Guest Bath"));
-            // Veify checksum
-            for (int k = 0; k < DATA_LENGTH - 1; k++)
-            { checksum += packet.data[k]; }
-            checksumPassed = ( checksum == packet.data[DATA_LENGTH - 1] );
+      // use pointer to put data into the structure
+      ptr_WirelessSensor->addressTx       = g_lastTxToSendData;
+      ptr_WirelessSensor->isWet           = psPacket->data[2];
+      ptr_WirelessSensor->tempF           = psPacket->data[3] << 8;
+      ptr_WirelessSensor->tempF          |= psPacket->data[4];
+      ptr_WirelessSensor->millivolts      = psPacket->data[5] << 8;
+      ptr_WirelessSensor->millivolts     |= psPacket->data[6];
+      ptr_WirelessSensor->lastRxTimestamp = millis();
+      ptr_WirelessSensor->rssi            = psPacket->rssi; // signal strength
+      ptr_WirelessSensor->lqi             = psPacket->lqi;  // link quality index
+    } // end checksum passed
+  } // end length ok
+  
 
-            for (int j = 0; j < DATA_LENGTH; j++)
-            { I2C_Packet[j + DATA_LENGTH] = packet.data[j]; }
-
-            if ( checksumPassed )
-            { lastRxSuccess[2] = millis(); } // Time of successful receipt of panStamp data from Guest Bath
-            else
-            { I2C_Packet[1 + DATA_LENGTH] = PANSTAMP_OFFLINE; } // checksum failed, set Tx Address to indicate panStamp is offline
-            
-            blinker(LED_COMM, 2);  // blink LED twice to indicate receipt of panStamp packet from Guest Bath
-            break;
-
-          default:
-            Serial.print(F("\nGot packet from unknown panStamp Tx ID = "));
-            Serial.println(packet.data[1]);
-            I2C_Packet[1] = PANSTAMP_OFFLINE;
-            I2C_Packet[1 + DATA_LENGTH] = PANSTAMP_OFFLINE;
-            break;
-
-        }  // switch
-
-        printSensorValues();  // Print data received
-
-      } // packet is okay
-    }  // got packet
-
-    // Enable wireless reception interrupt
-    attachInterrupt(0, cc1101signalsInterrupt, FALLING);
-  }
+} // end radioSignalInterrupt()
 
 
-} // loop
-
+//========================================================================================================================================
+// function executes when master sends over the address of the
+// wireless water sensor that it wants
+//========================================================================================================================================
+void wireGetAddressEvent(int numBytes)
+{
+  g_TxAddress_Requested = Wire.read();
+}
 
 //========================================================================================================================================
 // function that executes whenever data is requested by master
@@ -224,19 +239,67 @@ void loop()
 void wireRequestEvent()
 {
 
-  // If we haven't received any data from the panStamp in a while then
-  // set the panStamp Tx byte to indicate it's offline by setting it to 255
-  if ((long)( millis() - lastRxSuccess[1]) > PANSTAMP_TIMEOUT )    // Master Bath
-  { I2C_Packet[1] = PANSTAMP_OFFLINE; }
+  struct WirelessWaterDetector *ptr_Wireless_Sensor;
 
-  if ((long)( millis() - lastRxSuccess[2]) > PANSTAMP_TIMEOUT )   // Guest Bath
-  { I2C_Packet[DATA_LENGTH + 1] = PANSTAMP_OFFLINE; }
+  switch (g_TxAddress_Requested)
+  {
+    case ADDR_BATH_MASTER:
+      ptr_Wireless_Sensor = &g_bathMaster;
+      break;
+      
+    case ADDR_BATH_GUEST:
+      ptr_Wireless_Sensor = &g_bathGuest;
+      break;
 
-  // Send byte array from panStamp. Main Arduino will decode bytes
-  Wire.write(I2C_Packet, NUM_TX * DATA_LENGTH);
+    case ADDR_BATH_FIRST:
+      ptr_Wireless_Sensor = &g_bathFirstFloor;
+      break;
+      
+    default:
+      ptr_Wireless_Sensor = &g_unknownSensor;
+      break;
+  }
 
-} // wireRequestEvent()
+  if ((long)( millis() - ptr_Wireless_Sensor->lastRxTimestamp) > PANSTAMP_TIMEOUT )
+  { ptr_Wireless_Sensor->isOnline = false; }
+  else
+  { ptr_Wireless_Sensor->isOnline = true; }
 
+  g_I2C_Packet[0] = ptr_Wireless_Sensor->addressTx;
+  g_I2C_Packet[1] = ptr_Wireless_Sensor->isOnline;
+  g_I2C_Packet[2] = ptr_Wireless_Sensor->isWet;
+  g_I2C_Packet[3] = ptr_Wireless_Sensor->tempF >> 8 & 0xff;       // low byte for temp
+  g_I2C_Packet[4] = ptr_Wireless_Sensor->tempF & 0xff;            // high byte for temp
+  g_I2C_Packet[5] = ptr_Wireless_Sensor->millivolts >> 8 & 0xff;  // low byte for mV
+  g_I2C_Packet[6] = ptr_Wireless_Sensor->millivolts & 0xff;       // high byte for mV
+  g_I2C_Packet[7] = 0; // spare
+  g_I2C_Packet[8] = 0; // spare
+  
+  // Calculate checksum
+  g_I2C_Packet[CHECKSUM_I2C] = 0;
+  for (int cs = 0; cs < CHECKSUM_I2C; cs++)
+  { g_I2C_Packet[CHECKSUM_I2C] += g_I2C_Packet[cs]; }
+  
+  
+  // Send data to I2C master
+  Wire.write(g_I2C_Packet, I2C_DATA_LENGTH);
+
+} // end wireRequestEvent()
+
+
+//============================================================================
+// Blink LED count times
+//============================================================================
+void blinker(byte led_pin, int count)
+{
+  for(int j=1; j<=count; j++)
+  {
+    digitalWrite(led_pin, HIGH);
+    delay(50);
+    digitalWrite(led_pin, LOW);
+    delay(50);
+  }
+}  // end blinker()
 
 
 //=============================================================================================================================================
@@ -247,50 +310,46 @@ void printpanStampConfig()
 
   // Print device setup info
   Serial.print(F("Radio Frequency = "));
-  if(cc1101.carrierFreq == CFREQ_868)
+  if(panstamp.radio.carrierFreq == CFREQ_868)
   {Serial.println(F("868 Mhz"));}
   else
   {Serial.println(F("915 Mhz"));}
   Serial.print(F("Channel = "));
-  Serial.println(cc1101.channel);
+  Serial.println(panstamp.radio.channel);
   Serial.print(F("Network address = "));
-  Serial.println(cc1101.syncWord[0]);
+  Serial.println(panstamp.radio.syncWord[0]);
   Serial.print(F("Device address =  "));
-  Serial.println(cc1101.devAddress);
+  Serial.println(panstamp.radio.devAddress);
 
-}  // printpanStampConfig()
+}  // end printpanStampConfig()
+
+
 
 //=============================================================================================================================================
 //  Convert data from panStamp Tx and print - for debugging
 //=============================================================================================================================================
-void printSensorValues()
+void printSensorValues(WirelessWaterDetector& psPkt)
 {
 
-  Serial.print("Link Quality: ");
-  Serial.print(packet.lqi);
-  Serial.print("   RSSI: ");
-  Serial.println(packet.rssi);
-  for (int p = 0; p < packet.length; p++)
-  {
-    Serial.print("data[");
-    Serial.print(p);
-    Serial.print("] = ");
-    Serial.println(packet.data[p]);
-  }
+  Serial.print("\n\rAddr = ");
+  Serial.print(psPkt.addressTx);
+  
+  Serial.print("\ttemp = ");
+  Serial.print(psPkt.tempF);
+  
+  Serial.print("\tVcc = ");
+  Serial.print(psPkt.millivolts);
+  
+  Serial.print("\tIs Wet = ");
+  Serial.print(psPkt.isWet);
 
-  int Vcc = 0;
-  Vcc  = packet.data[5] << 8;
-  Vcc |= packet.data[6];
+  Serial.print("\tRSSI = ");
+  Serial.print(psPkt.rssi);
 
-  Serial.print("millivolts = ");
-  Serial.println(Vcc);
+  Serial.print("\tLQI = ");
+  Serial.print(psPkt.lqi);
 
-  int tempADC = 0;
-  tempADC  = packet.data[3] << 8;
-  tempADC |= packet.data[4];
-  Serial.print("Temp = ");
-  Serial.println(tempADC);
 
-} // printSensorValues()
+} // end printSensorValues()
 
 

@@ -1,27 +1,22 @@
 /*
-panStamp Tx for Water detector.  
-Compile on IDE 1.0.x
-When uploading sketch be sure to uncomment the right #define depending on whether this is master bath or guest bath
+Wireless Water Detector Trasnmitter
+Compile on IDE 1.6.x w/panStamp patch
+Board: panStamp AVR
+
+Link to panStamp libraries on GitHub: http://git.io/pkhC
+Link to panStamp Wiki, API section: http://github.com/panStamp/panstamp/wiki/panStamp-API
+
  
 To Do:
-Add 3rd wireless sensor for downstairs bathroom
-Update sketch to work with latest panStamp API
- 
+Add transmitter name to data that's sent to panstamp - maybe 
 
-Changes for PCB
- Use square RGB Led, sparkfun COM-11679
- Move batteries .08" up
- put Led to the right of status pushbutton
- move on/off switch up and put text below switch
- move temp sensor to LEDs old position
- use 1/4 watt resistors, not 1/8
- Use bigger wirepads for probes that go into the sponge
  
 Inputs:
  Wet/Dry status from sponge
  Temperature from OneWire DS18B20
  Status button - when pressed RGB LED will display status
-
+ Address selector rotary dip switch
+ 
 Outputs:
  3 PWM for RGB LED
 
@@ -41,81 +36,275 @@ CR123 batteries will last several months
 
 === I/O ===
 D3 - Status LED, Blu, PWM
-D4 - Water detector - sponge an op-amp
+D4 - Water detector - sponge with op-amp
 D5 - Status LED, Grn, PWM
 D6 - Status LED, Red, PWM
 D8 - 1Wire temperature sensor input
 D9 - Status button input
-
-
-Change Log:
-07/04/14 v2.00 - Made ledColor an enum, added spare data field and checksum
+A0-3 - BCD switch for address selector
 
  
+Change Log:
+07/04/14 v2.00 - Made ledColor an enum, added spare data field and checksum
+02/26/15 v2.01 - Moved voltage calibration from main sketch to this one. Changed some variable names, formatting. Support for 3rd wireless transmitter
+                 Started adding support for BCD address switch.  Added code to save voltage calibration to EEPROM
+03/08/15 v2.02   Upgraded to work with latest panStamp API library. Lots of formatting and comment changes.  
+                 Removed readVcc() function and replaced with panstamp.getVcc().  Removed unused files: Water_detector_Tx_Library.h/cpp
 */
 
-// Comment out all but one DEVICE_xxx.  This sets the devide ID for the panStamp
-//#define DEVICE_MASTER_BATH  
-#define DEVICE_GUEST_BATH 
+#define VERSION  "2.02"
 
-//#include <Arduino.h>
-#include "EEPROM.h"              // panStamp address is saved to EEPROM http://www.arduino.cc/en/Reference/EEPROM
-#include "cc1101.h"              // http://code.google.com/p/panstamp/source/browse/trunk/arduino/libraries/panstamp/cc1101.h
-#include "panstamp.h"            // http://code.google.com/p/panstamp/source/browse/trunk/arduino/libraries/panstamp/panstamp.h
-                                 // http://code.google.com/p/panstamp/wiki/PANSTAMPclass
-#include <OneWire.h>             // http://www.pjrc.com/teensy/td_libs_OneWire.html
-#include <DallasTemperature.h>   // http://milesburton.com/Main_Page?title=Dallas_Temperature_Control_Library
+const byte g_Tx_Address         = 1;  // Master Bath = 1, Guest = 2, First Floor  = 3.  SRG - delete after BCD switch is hooked up
+
+const bool SAVE_VOLTAGE_CALIB = false; // set to true to save voltage calibration offset (g_volt_calibration) to EEPROM.  Just do this once right after calibration offset is calculated with a voltmeter
+       int g_volt_calibration = -71;  // Master = -71, Guest = -40, First Floor = 0
 
 
-#define WET LOW    // When digital input from sponge/Op-Amp is LOW, the sponge is wet
-#define TEMPERATURE_PRECISION 9
-
-byte const LED_RED_PIN =         6;  // RGB LED
-byte const LED_GRN_PIN =         5;
-byte const LED_BLU_PIN =         3;
-byte const STATUS_BTN_PIN =      9;  // Status pushbutton input
-byte const SPONGE_PIN  =         4;  // Sponge input pin
-byte const DATA_LENGTH =        10;  // bytes to send to receiving panStamp
-byte const TEMP_SENSOR_PIN =     8;  // One Wire temp sensor pin
-const uint16_t INVALID_1WIRE_TEMP =   185; // Temp returned by 1wire when it doesn't have a vaid temperature
-
-// Color setting for LED
-// Green - volts ok, yellow - volts getting low, red - low volts, blue - water detected
-enum ledColor { GREEN, YELLOW, RED, BLUE, WHITE };
-
-CC1101 cc1101;   // http://code.google.com/p/panstamp/wiki/CC1101class
-
-// Setup a oneWire instances to communicate OneWire temp sensor
-OneWire oneWire(TEMP_SENSOR_PIN); // strand is under kitchen and dining room, IDs 0-16
-// Pass our oneWire reference to Dallas Temperature. 
-DallasTemperature sensors(&oneWire);
+#include <Arduino.h>
+#include <HardwareSerial.h>
+#include <EEPROM.h>              // panStamp address is saved to EEPROM http://www.arduino.cc/en/Reference/EEPROM
+#include "OneWire.h"             // http://www.pjrc.com/teensy/td_libs_OneWire.html
+#include "DallasTemperature.h"   // http://milesburton.com/Main_Page?title=Dallas_Temperature_Control_Library
 
 
-// The networkAdress of sender and receiver must be the same
-// in the cc1101 documentation this byte is called syncword
-// in the SWAP world of the panStamp it is called networkAddress
-byte networkAddress =    46;
-byte receiverAddress =   99;
-#ifdef DEVICE_MASTER_BATH
-  byte senderAddress =    1;  // For master bath, orange antenna
-#endif
-#ifdef DEVICE_GUEST_BATH
-  byte senderAddress =    2;  // For Guest bath, gray antenna
-#endif
+#define WET LOW                  // When digital input from sponge/Op-Amp is LOW, the sponge is wet
+#define TEMPERATURE_PRECISION 9  // sets precision of DS18B20 1-wire temperature sensor
+
+const byte PIN_LED_RED =          6;  // RGB LED Red, PWM pin
+const byte PIN_LED_GRN =          5;  // RGB LED Green, PWM pin
+const byte PIN_LED_BLU =          3;  // RGB LED Blue, PWM pin
+const byte PIN_STATUS_BUTTON =    9;  // Status pushbutton input pin
+const byte PIN_SPONGE  =          4;  // Input pin from op-amp connected to the sponge
+const byte PIN_TEMPERATURE =      8;  // Data pin for 1-Wire temperature sensor
+const byte PIN_ADDR_BCD1    =    A0;  // Rotary BCD switch pin 1
+const byte PIN_ADDR_BCD2    =    A0;  // Rotary BCD switch pin 2
+const byte PIN_ADDR_BCD4    =    A0;  // Rotary BCD switch pin 4
+const byte PIN_ADDR_BCD8    =    A0;  // Rotary BCD switch pin 8
+
+
+const byte DATA_LENGTH_PS =                10;  // number of bytes in wireless packet going to receiver
+const byte CHECKSUM_BYTE = DATA_LENGTH_PS - 1;  // packet checksum (last byte in packet)
+const byte EEPROM_ADDR_CALIB =            100;  // Starting EEPROM address used to store for voltage calibration offset
+
+
+// Color settings for LED
+// Green = volts ok, yellow = volts getting low, red = low volts, blue = water detected
+enum ledColor_t { GREEN, YELLOW, RED, BLUE, WHITE };
+
+
+// Setup a 1-Wire instances to communicate 1-Wire DS18B20 temperature sensor
+OneWire oneWire(PIN_TEMPERATURE);
+DallasTemperature tempSensor(&oneWire);
+
+
+// panStamp config
+const byte g_RF_Channel =               0;  // panStamp channel
+      byte g_psNetworkAddress[] = {46, 0};  // panStamp network address, aka SyncWord.  Tx and Rx must have same network address
+const byte g_psReceiverAddress =       99;  // panStamp receiver address
+const uint16_t LOW_VOLT_LIMIT =      2500;  // Minimum millivolts that panStamp can operate.  If volts is below this, don't send data
 
 // Function Prototypes
-void statusLight(ledColor color);
 bool isWet();
-unsigned int readVcc();
+byte getDeviceAddress();          // returns panStamp address of this transmitter by reading BCD rotary switch
+void blinkLED(ledColor_t color); 
+
+
 
 //============================================================================
-void statusLight(ledColor color)
+//============================================================================
+void setup()
+{
+  
+  Serial.begin(9600);
+  Serial.print("Wireless Water Detector Transmitter\n\rVersion: ");
+  Serial.println(VERSION);
+  
+  delay(1000);
+
+  // Setup digital I/O pins
+  pinMode(PIN_LED_RED, OUTPUT);
+  pinMode(PIN_LED_GRN, OUTPUT);
+  pinMode(PIN_LED_BLU, OUTPUT);
+  pinMode(PIN_ADDR_BCD1, INPUT_PULLUP);  // Rotary BCD switch to select panStamp address
+  pinMode(PIN_ADDR_BCD2, INPUT_PULLUP);
+  pinMode(PIN_ADDR_BCD4, INPUT_PULLUP);
+  pinMode(PIN_ADDR_BCD8, INPUT_PULLUP);
+  
+  pinMode(PIN_TEMPERATURE, INPUT);
+  pinMode(PIN_STATUS_BUTTON,  INPUT_PULLUP);
+  
+  // initialize panStamp radio
+  panstamp.radio.setChannel(g_RF_Channel);
+  panstamp.radio.setSyncWord(g_psNetworkAddress);    // Set network address
+  panstamp.radio.setDevAddress(getDeviceAddress());  // Set Tx address for this panStamp
+  
+  panstamp.radio.setTxPowerAmp(PA_LongDistance);     // Turns on high power mode. PA_LowPower is the default 
+
+  // Start up the library for temp sensor
+  tempSensor.begin();
+
+  byte volt_calib_lsb, volt_calib_msb;
+  const byte CALIB_DATA_SAVED = 111;  // calibration status, 111 = calibration data has been saved, anything else it hasn't
+  if( SAVE_VOLTAGE_CALIB )
+  {
+    // Save voltage (mV) calibration offset to EEPROM
+    volt_calib_msb = g_volt_calibration >> 8 & 0xff;
+    volt_calib_lsb = g_volt_calibration & 0xff;
+    EEPROM.write(EEPROM_ADDR_CALIB,   CALIB_DATA_SAVED);  // So sketch can detect if calib data has been saved to EEPROM
+    EEPROM.write(EEPROM_ADDR_CALIB + 1, volt_calib_lsb);
+    EEPROM.write(EEPROM_ADDR_CALIB + 2, volt_calib_msb);
+    blinkLED(WHITE); // Blink status light
+    blinkLED(WHITE); 
+  }
+  else 
+  {
+    // read voltage (mV) calibration from EEPROM
+    if ( EEPROM.read(EEPROM_ADDR_CALIB) == CALIB_DATA_SAVED )  // check to see if calibration has been saved to EEPROM
+    { 
+      // Calibration data has previously been saved to EEPROM, so go ahead and read it
+      volt_calib_lsb = EEPROM.read(EEPROM_ADDR_CALIB + 1);
+      volt_calib_msb = EEPROM.read(EEPROM_ADDR_CALIB + 2);
+      g_volt_calibration = volt_calib_msb << 8;
+      g_volt_calibration |= volt_calib_lsb;
+      blinkLED(GREEN); // Blink status light green 
+      blinkLED(GREEN);
+    }
+    else // there is no calibration data in EEPROM
+    { 
+      g_volt_calibration = 0; 
+      blinkLED(RED); // Blink status red 
+      blinkLED(RED);
+    }  
+  }
+  
+} // end setup()
+
+
+//============================================================================
+// Main loop.  Read temp sensor, wet/dry status, battery voltage
+// Sleeps 8 seconds, then wakes up to send data, then goes to sleep again
+//============================================================================
+void loop()
+{
+  
+  static int16_t airTemp;
+  panstamp.sleepSec(8);  // Sleep for 8 seconds. millis() doesn't increment while sleeping See: http://github.com/panStamp/panstamp/wiki/panStamp-API#sleepsec
+  delay(100);  // time to wake up
+
+  uint16_t battery = panstamp.getVcc(); // Read battery voltage
+  
+  tempSensor.requestTemperatures();         // Send the command to get temperatures
+  airTemp = tempSensor.getTempFByIndex(0);  // Read temp sensor
+  if ( airTemp > 100 || airTemp < 0)
+  { airTemp = -1; }  // got invalid temp from 1wire
+
+  // Send data only if voltage is greater than LOW_VOLT_LIMIT
+  // If voltage is lower then this, panStamp doesn't work properly and send out bad data
+  if ( battery >= LOW_VOLT_LIMIT )
+  {
+    CCPACKET psPacket;
+    psPacket.length = DATA_LENGTH_PS;        // # bytes that make up packet to transmit
+    psPacket.data[0] = g_psReceiverAddress;  // Address of panStamp Rx data is sent too. THIS IS REQUIRED BY THE CC1101 LIBRARY
+    psPacket.data[1] = getDeviceAddress();   // Address of this panStamp Tx
+    psPacket.data[2] = isWet();              // Read wet-dry status
+    psPacket.data[3] = airTemp >> 8 & 0xff;  // High byte - shift bits 8 places, 0xff masks off the upper 8 bits
+    psPacket.data[4] = airTemp      & 0xff;  // Low byte, just mask off the upper 8 bits
+    psPacket.data[5] = battery >> 8 & 0xff;  // High byte - shift bits 8 places, 0xff masks off the upper 8 bits
+    psPacket.data[6] = battery      & 0xff;  // Low byte, just mask off the upper 8 bits
+    psPacket.data[7] = 0x00;                 // Spare
+    psPacket.data[8] = 0x00;                 // Spare
+    // Calculate checksum
+    psPacket.data[CHECKSUM_BYTE] = 0; // clear checksum
+    for( byte cs = 0; cs < CHECKSUM_BYTE; cs++)
+    { psPacket.data[CHECKSUM_BYTE] += psPacket.data[cs]; }
+    
+    bool sentStatus = panstamp.radio.sendData(psPacket);  // send the data
+  }
+    
+  // When status button is pressed (LOW) turn on status LED
+  // User needs to hold down the button up to 8 seconds because panStamp is probably asleep
+  if(digitalRead(PIN_STATUS_BUTTON) == LOW)   
+  {
+    // LED color reflects voltage level
+    if ( battery < 2700 )
+    { blinkLED(RED); }
+    else if ( battery < 2900 )
+    { blinkLED(YELLOW); }
+    else
+    { blinkLED(GREEN); }
+    delay(500);
+    
+    // Make LED blue if sponge is wet
+    if(isWet() == true)
+    { 
+      blinkLED(BLUE);
+      delay(500);
+    }
+  }
+  
+}  // end loop()
+
+
+//=======================================================================
+// Read the wet/dry status of sponge input
+// Return true if sponge is wet
+//=======================================================================
+bool isWet()
+{
+  // Loop until two consecutive reading are the same
+  bool firstreading;
+  bool secondreading;
+  do 
+  {
+    firstreading = digitalRead(PIN_SPONGE);
+    delay(10);
+    secondreading = digitalRead(PIN_SPONGE);
+  } while (firstreading != secondreading);
+  
+  if (firstreading == WET)
+  { return true; } 
+  else
+  { return false;}
+  
+} // end isWet()
+
+
+//=======================================================================
+// Read BCD switch to get address for this transmitter
+//=======================================================================
+byte getDeviceAddress()
+{
+
+  byte txAddress = 0;
+  
+  // Read BCD switch and set address
+  if (digitalRead(PIN_ADDR_BCD1))
+  { txAddress |= 0x01; }
+  if (digitalRead(PIN_ADDR_BCD2))
+  { txAddress |= 0x02; }
+  if (digitalRead(PIN_ADDR_BCD4))
+  { txAddress |= 0x04; }
+  if (digitalRead(PIN_ADDR_BCD8))
+  { txAddress |= 0x08; }
+//srg  return txAddress;
+  
+  
+// srg, once BCD is connected, delete the code below
+  return g_Tx_Address;
+  
+}  // end getDeviceAddress()
+
+
+//============================================================================
+// Blink LED for 1/2 second.  color is passed to this function
+//============================================================================
+void blinkLED(ledColor_t color)
 {
   byte redColor;
   byte grnColor;
   byte bluColor;
   
-  // Set color
+  // Set LED color
   switch (color)
   {
     case RED:
@@ -145,212 +334,20 @@ void statusLight(ledColor color)
       break;
   } 
 
-  analogWrite(LED_RED_PIN, redColor);
-  analogWrite(LED_GRN_PIN, grnColor);
-  analogWrite(LED_BLU_PIN, bluColor);
+  analogWrite(PIN_LED_RED, redColor);
+  analogWrite(PIN_LED_GRN, grnColor);
+  analogWrite(PIN_LED_BLU, bluColor);
   
   delay(500);
   
   // Turn LED off
-  analogWrite(LED_RED_PIN, 0);
-  analogWrite(LED_GRN_PIN, 0);
-  analogWrite(LED_BLU_PIN, 0);
+  analogWrite(PIN_LED_RED, 0);
+  analogWrite(PIN_LED_GRN, 0);
+  analogWrite(PIN_LED_BLU, 0);
+  delay(100);
 
-} // statusLight()
-
-
-//============================================================================
-/*                888                      
-                  888                      
-                  888                      
-.d8888b   .d88b.  888888 888  888 88888b.  
-88K      d8P  Y8b 888    888  888 888 "88b 
-"Y8888b. 88888888 888    888  888 888  888 
-     X88 Y8b.     Y88b.  Y88b 888 888 d88P 
- 88888P'  "Y8888   "Y888  "Y88888 88888P"  
-                                  888      
-                                  888      
-                                  888      
-                                  
-http://patorjk.com/software/taag/#p=display&f=Colossal&t=setup  */
-//============================================================================
-void setup()
-{
-  delay(1000);
-  
-  // Setup digital I/O pins
-  pinMode(LED_RED_PIN, OUTPUT);
-  pinMode(LED_GRN_PIN, OUTPUT);
-  pinMode(LED_BLU_PIN, OUTPUT);
-    
-  pinMode(TEMP_SENSOR_PIN, INPUT);
-  pinMode(STATUS_BTN_PIN,  INPUT_PULLUP);
-  
-  
-  // Initialize the CC1101 RF Chip
-  cc1101.init();
-  cc1101.setSyncWord(&networkAddress, false);   // true saves address to EEPROM
-  cc1101.setDevAddress(senderAddress, false);   // true saves address to EEPROM
-
-  // Start up the library for temp sensors
-  sensors.begin();
-
-  // Blink status light
-  statusLight(WHITE);
-
-} // setup()
-
-//============================================================================
-// continuously reads packets, looking for RX16 only
-/*
-888                            
-888                            
-888                            
-888  .d88b.   .d88b.  88888b.  
-888 d88""88b d88""88b 888 "88b 
-888 888  888 888  888 888  888 
-888 Y88..88P Y88..88P 888 d88P 
-888  "Y88P"   "Y88P"  88888P"  
-                      888      
-                      888      
-                      888      
-*/
-// Sleeps 8 seconds, then wakes up to send data.  That's is
-//============================================================================
-void loop()
-{
-  
-  static uint16_t airTemp; 
-  panstamp.sleepWd(WDTO_8S);  // Sleep for 8 seconds. millis() doesn't increment while sleeping
-  delay(100);  // time to wake up
-
-  uint16_t battery = readVcc();          // Read battery voltage
-
-    sensors.requestTemperatures(); // Send the command to get temperatures
-    airTemp = sensors.getTempFByIndex(0);  // Read temp sensor
-
-  // Send data only if voltage is >= 2500mV and temperature != INVALID_1WIRE_TEMP (185 is invalid and often sent by 1wire when starting up)
-  // If voltage is lower, device generates false alarms
-  if ( battery >= 2500 && airTemp != INVALID_1WIRE_TEMP)
-  {
-    CCPACKET data;
-    data.length = DATA_LENGTH;          // # bytes that make up packet to transmit
-    data.data[0] = receiverAddress;     // Address of panStamp Rx data is sent too. THIS IS REQUIRED BY THE CC1101 LIBRARY
-    data.data[1] = senderAddress;       // Address of this panStamp Tx
-    data.data[2] = isWet();             // Read wet-dry status
-    data.data[3] = airTemp >> 8 & 0xff; // High byte - shift bits 8 places, 0xff masks off the upper 8 bits
-    data.data[4] = airTemp & 0xff;      // Low byte, just mask off the upper 8 bits
-    data.data[5] = battery >> 8 & 0xff; // High byte - shift bits 8 places, 0xff masks off the upper 8 bits
-    data.data[6] = battery & 0xff;      // Low byte, just mask off the upper 8 bits
-    data.data[7] = 0x00;                // Sprare
-    data.data[8] = 0x00;                // Spare
-    // Calculate checksum
-    data.data[9] = 0; // clear 
-    for( int i=0; i < DATA_LENGTH-1; i++)
-    { data.data[9] += data.data[i]; }
-    
-    // Transmit data
-    cc1101.sendData(data);
-  }
-    
-  // When status button is pressed (LOW) turn on status LED
-  // Need to hold down up to 8 seconds because panStamp is asleep most of the time
-  if(digitalRead(STATUS_BTN_PIN) == LOW)   
-  {
-    // LED should reflect voltage level
-    if(battery < 2700)
-    { statusLight(RED); }
-    else if(battery < 2900)
-    { statusLight(YELLOW); }
-    else
-    { statusLight(GREEN); }
-    delay(500);
-    
-    // Make LED blue if sponge is wet
-    if(isWet() == true)
-    { 
-      statusLight(BLUE); 
-      delay(500);
-    }
-  }
-  
-}  // loop()
+} // end blinkLED()
 
 
-//=======================================================================
-/*
-d8b          888       888          888    
-Y8P          888   o   888          888    
-             888  d8b  888          888    
-888 .d8888b  888 d888b 888  .d88b.  888888 
-888 88K      888d88888b888 d8P  Y8b 888    
-888 "Y8888b. 88888P Y88888 88888888 888    
-888      X88 8888P   Y8888 Y8b.     Y88b.  
-888  88888P' 888P     Y888  "Y8888   "Y888 
-*/
-// Read the wet/dry status of sponge input
-// Return true if sponge is wet
-//=======================================================================
-bool isWet()
-{
-  // Loop until two consecutive reading are the same
-  bool firstreading;
-  bool secondreading;
-  do 
-  {
-    firstreading = digitalRead(SPONGE_PIN);
-    delay(10);
-    secondreading = digitalRead(SPONGE_PIN);
-  } while (firstreading != secondreading);
-  
-  if (firstreading == WET)
-  { return true; } 
-  else
-  { return false;}
-  
-} // isWet()
 
-
-//=======================================================================
-/*
-                              888 888     888                  
-                              888 888     888                  
-                              888 888     888                  
-888d888 .d88b.   8888b.   .d88888 Y88b   d88P  .d8888b .d8888b 
-888P"  d8P  Y8b     "88b d88" 888  Y88b d88P  d88P"   d88P"    
-888    88888888 .d888888 888  888   Y88o88P   888     888      
-888    Y8b.     888  888 Y88b 888    Y888P    Y88b.   Y88b.    
-888     "Y8888  "Y888888  "Y88888     Y8P      "Y8888P "Y8888P 
-*/
-// Source: http://provideyourown.com/2012/secret-arduino-voltmeter-measure-battery-voltage/
-// Returns battery vols in mA
-//=======================================================================
-unsigned int readVcc() 
-{
-  
-  // Read 1.1V reference against AVcc
-  // set the reference to Vcc and the measurement to the internal 1.1V reference
-  #if defined(__AVR_ATmega32U4__) || defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
-    ADMUX = _BV(REFS0) | _BV(MUX4) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
-  #elif defined (__AVR_ATtiny24__) || defined(__AVR_ATtiny44__) || defined(__AVR_ATtiny84__)
-    ADMUX = _BV(MUX5) | _BV(MUX0);
-  #elif defined (__AVR_ATtiny25__) || defined(__AVR_ATtiny45__) || defined(__AVR_ATtiny85__)
-    ADMUX = _BV(MUX3) | _BV(MUX2);
-  #else
-    ADMUX = _BV(REFS0) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
-  #endif  
- 
-  delay(2); // Wait for Vref to settle
-  ADCSRA |= _BV(ADSC); // Start conversion
-  while (bit_is_set(ADCSRA,ADSC)); // measuring
- 
-  uint8_t low  = ADCL; // must read ADCL first - it then locks ADCH  
-  uint8_t high = ADCH; // unlocks both
- 
-  long result = (high<<8) | low;
- 
-  result = 1125300L / result; // Calculate Vcc (in mV); 1125300 = 1.1*1023*1000
-  return (unsigned int) result; // Vcc in millivolts
-  
-} // readVcc()
 

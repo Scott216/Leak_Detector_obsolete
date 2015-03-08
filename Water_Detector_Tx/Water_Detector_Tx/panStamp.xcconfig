@@ -1,0 +1,47 @@
+//
+//  panStamp.xcconfig
+//  Board configuration file
+//  ----------------------------------
+//  Developed with embedXcode
+//
+//  Part of embedXcode
+//  Embedded Computing on Xcode
+//
+//  Created by  Scott Goldthwaite on Mar 05, 2014
+//  Based on file form Rei VILO
+//  Copyright 	(c) 2014 http://embeddedcomputing.weebly.com
+//  License     All rights reserved
+//
+
+
+// Board identifier
+// See Boards.txt for <tag>.name=Arduino Uno (16 MHz)
+//
+BOARD_TAG  = pro328
+
+// For Arduino 1.5.x, if different from Arduino 1.0.x
+//
+BOARD_TAG1 = pro
+BOARD_TAG2 = pro.menu.cpu.8MHzatmega328
+
+// Port (optional)
+// To see which port panStamp uses, plug the panStamp into USB
+// Then go to terminal and type: ls /dev/tty.usb*
+// Use the result as for BOARD_PORT
+BOARD_PORT = /dev/tty.usbserial-A1014LSF
+
+// References for Xcode code-sense
+// See Boards.txt for <tag>.build.mcu=<GCC_PREPROCESSOR_DEFINITIONS>
+//
+GCC_PREPROCESSOR_DEFINITIONS = __AVR_ATmega328P__ ARDUINO
+
+// Specify the full path and name of the application
+// with /Contents/Resources/Java/** after
+//
+HEADER_SEARCH_PATHS = /Applications/Arduino.app/Contents/Resources/Java/**
+
+// Maximum RAM size in bytes
+// given by <tag>.upload.maximum_ram_size in boards.txt for Maple and Teensy
+// given by <tag>.upload.maximum_data_size in boards.txt for Arduino 1.5.x
+//
+MAX_RAM_SIZE = 2048
