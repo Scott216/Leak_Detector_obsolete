@@ -9,6 +9,7 @@ Link to panStamp Wiki, API section: http://github.com/panStamp/panstamp/wiki/pan
  
 To Do:
 Add transmitter name to data that's sent to panstamp - maybe 
+Start Tx addresses at zero, this way in the Rx sketch, you can use an array and make the array element the Tx address. You want array to start at zero
 
  
 Inputs:
@@ -50,11 +51,12 @@ Change Log:
                  Started adding support for BCD address switch.  Added code to save voltage calibration to EEPROM
 03/08/15 v2.02   Upgraded to work with latest panStamp API library. Lots of formatting and comment changes.  
                  Removed readVcc() function and replaced with panstamp.getVcc().  Removed unused files: Water_detector_Tx_Library.h/cpp
+                 Changed addresses of panStamps transmitters to start at 0 - bacause address ID is used in as array element number
 */
 
 #define VERSION  "2.02"
 
-const byte g_Tx_Address         = 1;  // Master Bath = 1, Guest = 2, First Floor  = 3.  SRG - delete after BCD switch is hooked up
+const byte g_Tx_Address         = 1;  // Master Bath = 0, Guest = 1, First Floor  = 2.  SRG - delete after BCD switch is hooked up
 
 const bool SAVE_VOLTAGE_CALIB = false; // set to true to save voltage calibration offset (g_volt_calibration) to EEPROM.  Just do this once right after calibration offset is calculated with a voltmeter
        int g_volt_calibration = -71;  // Master = -71, Guest = -40, First Floor = 0
