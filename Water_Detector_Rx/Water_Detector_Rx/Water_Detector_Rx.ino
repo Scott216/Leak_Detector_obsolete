@@ -36,9 +36,10 @@ Change Log
 07/04/14  v2.00 - added checksum to panStamp and I2C data
 02/24/15  v2.01 - add first floor bathroom, use stuct to hold data
 03/07/15  v2.02 - Upgraded to latest panStamp API 
+03/08/15  v2.03 - used array of struct WirelessWaterDetector instead of individual structures,  Deleted unused library files.
 */
 
-#define VERSION "2.02"
+#define VERSION "2.03"
 
 #include <Arduino.h> 
 #include <HardwareSerial.h>  // Required by IDE 1.6.x
@@ -69,11 +70,6 @@ const     byte CHECKSUM_PS = DATA_LENGTH_PS - 1;  // Checksum is last byte in pa
 const uint32_t PANSTAMP_TIMEOUT =        120000;  // 2 minute timeout for panStamps
 
      
-const byte ADDR_BATH_MASTER =  1;  // panStamp device address for 2nd floor master bath
-const byte ADDR_BATH_GUEST =   2;  // panStamp device address for 2nd floor guest bath
-const byte ADDR_BATH_FIRST =   3;  // panStamp device address for 1st floor bathroom
-
-
 // Create sturcture to hold info on remote wireless water detectors
 struct WirelessWaterDetector
 {
@@ -87,10 +83,8 @@ struct WirelessWaterDetector
   byte     lqi;              // link quality index
 };
 
-struct WirelessWaterDetector g_bathFirstFloor;
-struct WirelessWaterDetector g_bathMaster;
-struct WirelessWaterDetector g_bathGuest;
-struct WirelessWaterDetector g_unknownSensor;
+
+struct WirelessWaterDetector g_wirelessData[4];  // structure array to hold data from wireless sensors
 
 volatile boolean g_pSpacketAvailable = false;  // Flag that a wireless packet has been received
             byte g_TxAddress_Requested =   0;  // Address of remote transmitter the I2C master is requesting
@@ -139,30 +133,13 @@ void setup()
 //============================================================================
 void loop()
 {
-  // Get data from remote wirelesss water detectors
+  // Got data from remote wirelesss water detectors
   if(g_pSpacketAvailable)
   {
     g_pSpacketAvailable = false;  // reset flag
     blinker(LED_RX_DATA, 1);  // blink LED once to indicate receipt of wireless data
-    switch (g_lastTxToSendData)
-    {
-      case ADDR_BATH_MASTER:
-        printSensorValues(g_bathMaster);  // Print packet data
-        break;
-      case ADDR_BATH_GUEST:
-        printSensorValues(g_bathGuest);  // Print packet data
-        break;
-      case ADDR_BATH_FIRST:
-        printSensorValues(g_bathFirstFloor);  // Print packet data
-        break;
-      default:
-        Serial.print(F("packet from unknown Tx addr = "));
-        Serial.println(g_lastTxToSendData);
-        printSensorValues(g_unknownSensor);  // Print packet data
-        break;
-    }
- 
-  }  // packet available
+    printSensorValues(g_wirelessData[g_lastTxToSendData]);  // print some of the wireless data
+  }  
 
 } // end loop()
 
@@ -174,7 +151,7 @@ void radioSignalInterrupt(CCPACKET *psPacket)
 {
   if (psPacket->length == DATA_LENGTH_PS)
   {
-    struct WirelessWaterDetector *ptr_WirelessSensor;  // switch-case below will choose which instance of the structer the data is loaded into
+    struct WirelessWaterDetector *ptr_WirelessSensor;  // create pointer to structure
     
     // Validate data with checksum.  
     byte checksum = 0;
@@ -188,23 +165,9 @@ void radioSignalInterrupt(CCPACKET *psPacket)
       g_pSpacketAvailable = true;  // set the flag indicating new packet came in
       
       g_lastTxToSendData = psPacket->data[1];
-      switch (g_lastTxToSendData)
-      {
-        case ADDR_BATH_MASTER:
-          ptr_WirelessSensor = &g_bathMaster;
-          break;
-        case ADDR_BATH_GUEST:
-          ptr_WirelessSensor = &g_bathGuest;
-          break;
-        case ADDR_BATH_FIRST:
-          ptr_WirelessSensor = &g_bathFirstFloor;
-          break;
-        default:
-          ptr_WirelessSensor = &g_unknownSensor;
-          break;
-      }  // end switch
-
-      // use pointer to put data into the structure
+      ptr_WirelessSensor = &g_wirelessData[g_lastTxToSendData];
+      
+      // Save data to global structure array
       ptr_WirelessSensor->addressTx       = g_lastTxToSendData;
       ptr_WirelessSensor->isWet           = psPacket->data[2];
       ptr_WirelessSensor->tempF           = psPacket->data[3] << 8;
@@ -241,24 +204,7 @@ void wireRequestEvent()
 
   struct WirelessWaterDetector *ptr_Wireless_Sensor;
 
-  switch (g_TxAddress_Requested)
-  {
-    case ADDR_BATH_MASTER:
-      ptr_Wireless_Sensor = &g_bathMaster;
-      break;
-      
-    case ADDR_BATH_GUEST:
-      ptr_Wireless_Sensor = &g_bathGuest;
-      break;
-
-    case ADDR_BATH_FIRST:
-      ptr_Wireless_Sensor = &g_bathFirstFloor;
-      break;
-      
-    default:
-      ptr_Wireless_Sensor = &g_unknownSensor;
-      break;
-  }
+  ptr_Wireless_Sensor = &g_wirelessData[g_TxAddress_Requested];  // assign the transmitter data to structure
 
   if ((long)( millis() - ptr_Wireless_Sensor->lastRxTimestamp) > PANSTAMP_TIMEOUT )
   { ptr_Wireless_Sensor->isOnline = false; }
@@ -269,9 +215,9 @@ void wireRequestEvent()
   g_I2C_Packet[1] = ptr_Wireless_Sensor->isOnline;
   g_I2C_Packet[2] = ptr_Wireless_Sensor->isWet;
   g_I2C_Packet[3] = ptr_Wireless_Sensor->tempF >> 8 & 0xff;       // low byte for temp
-  g_I2C_Packet[4] = ptr_Wireless_Sensor->tempF & 0xff;            // high byte for temp
+  g_I2C_Packet[4] = ptr_Wireless_Sensor->tempF      & 0xff;       // high byte for temp
   g_I2C_Packet[5] = ptr_Wireless_Sensor->millivolts >> 8 & 0xff;  // low byte for mV
-  g_I2C_Packet[6] = ptr_Wireless_Sensor->millivolts & 0xff;       // high byte for mV
+  g_I2C_Packet[6] = ptr_Wireless_Sensor->millivolts      & 0xff;  // high byte for mV
   g_I2C_Packet[7] = 0; // spare
   g_I2C_Packet[8] = 0; // spare
   
@@ -311,9 +257,9 @@ void printpanStampConfig()
   // Print device setup info
   Serial.print(F("Radio Frequency = "));
   if(panstamp.radio.carrierFreq == CFREQ_868)
-  {Serial.println(F("868 Mhz"));}
+  { Serial.println(F("868 Mhz")); }
   else
-  {Serial.println(F("915 Mhz"));}
+  { Serial.println(F("915 Mhz")); }
   Serial.print(F("Channel = "));
   Serial.println(panstamp.radio.channel);
   Serial.print(F("Network address = "));
