@@ -49,17 +49,19 @@ Change Log:
 07/04/14 v2.00 - Made ledColor an enum, added spare data field and checksum
 02/26/15 v2.01 - Moved voltage calibration from main sketch to this one. Changed some variable names, formatting. Support for 3rd wireless transmitter
                  Started adding support for BCD address switch.  Added code to save voltage calibration to EEPROM
-03/08/15 v2.02   Upgraded to work with latest panStamp API library. Lots of formatting and comment changes.  
+03/08/15 v2.02 - Upgraded to work with latest panStamp API library. Lots of formatting and comment changes.
                  Removed readVcc() function and replaced with panstamp.getVcc().  Removed unused files: Water_detector_Tx_Library.h/cpp
                  Changed addresses of panStamps transmitters to start at 0 - bacause address ID is used in as array element number
+03/09/15 v2.03 - Trying to get sketch to compile in Xcode
+03/22/15 v2.04 - added print statements to voltage calibration section
 */
 
-#define VERSION  "2.02"
+#define VERSION  "2.04"
 
-const byte g_Tx_Address         = 1;  // Master Bath = 0, Guest = 1, First Floor  = 2.  SRG - delete after BCD switch is hooked up
+const byte g_Tx_Address         = 2;  // Master Bath = 0, Guest = 1, First Floor  = 2.  SRG - delete after BCD switch is hooked up
 
 const bool SAVE_VOLTAGE_CALIB = false; // set to true to save voltage calibration offset (g_volt_calibration) to EEPROM.  Just do this once right after calibration offset is calculated with a voltmeter
-       int g_volt_calibration = -71;  // Master = -71, Guest = -40, First Floor = 0
+     int16_t g_volt_calibration = 25;  // Master = -71, Guest = -40, First Floor = 0
 
 
 #include <Arduino.h>
@@ -134,6 +136,9 @@ void setup()
   
   pinMode(PIN_TEMPERATURE, INPUT);
   pinMode(PIN_STATUS_BUTTON,  INPUT_PULLUP);
+
+  Serial.print("Tx Address: ");
+  Serial.println(getDeviceAddress());
   
   // initialize panStamp radio
   panstamp.radio.setChannel(g_RF_Channel);
@@ -155,6 +160,9 @@ void setup()
     EEPROM.write(EEPROM_ADDR_CALIB,   CALIB_DATA_SAVED);  // So sketch can detect if calib data has been saved to EEPROM
     EEPROM.write(EEPROM_ADDR_CALIB + 1, volt_calib_lsb);
     EEPROM.write(EEPROM_ADDR_CALIB + 2, volt_calib_msb);
+    Serial.print("Saved new voltage calibration offset: ");
+    Serial.print(g_volt_calibration);
+    Serial.println(" mV");
     blinkLED(WHITE); // Blink status light
     blinkLED(WHITE); 
   }
@@ -168,12 +176,16 @@ void setup()
       volt_calib_msb = EEPROM.read(EEPROM_ADDR_CALIB + 2);
       g_volt_calibration = volt_calib_msb << 8;
       g_volt_calibration |= volt_calib_lsb;
+      Serial.print("Voltage calibration is: ");
+      Serial.print(g_volt_calibration);
+      Serial.println(" mV");
       blinkLED(GREEN); // Blink status light green 
       blinkLED(GREEN);
     }
     else // there is no calibration data in EEPROM
     { 
       g_volt_calibration = 0; 
+      Serial.println("No voltage calibration set");
       blinkLED(RED); // Blink status red 
       blinkLED(RED);
     }  
