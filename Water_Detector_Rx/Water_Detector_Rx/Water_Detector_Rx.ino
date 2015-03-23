@@ -14,9 +14,7 @@ Forum question about new api
 http://www.panstamp.org/forum/showthread.php?tid=4044
 
 
- 
 To Do:
-Use array for struct WirelessWaterDetector
 
  panStamp data received:
  byte 0:   panStamp Rx ID
@@ -37,13 +35,14 @@ Change Log
 02/24/15  v2.01 - add first floor bathroom, use stuct to hold data
 03/07/15  v2.02 - Upgraded to latest panStamp API 
 03/08/15  v2.03 - used array of struct WirelessWaterDetector instead of individual structures,  Deleted unused library files.
+03/22/15  v2.04 - Minor print changes.  Added blinker() function prototype
+
 */
 
-#define VERSION "2.03"
+#define VERSION "2.04"
 
 #include <Arduino.h> 
 #include <HardwareSerial.h>  // Required by IDE 1.6.x
-#include <EEPROM.h>          // http://www.arduino.cc/en/Reference/EEPROM
 #include <Wire.h>            // http://arduino.cc/it/Reference/Wire
 
 // This gets rid of compiler warning: Only initialized variables can be placed into program memory area
@@ -95,7 +94,7 @@ void printpanStampConfig();
 void wireRequestEvent();
 void radioSignalInterrupt();
 void printSensorValues(WirelessWaterDetector& psPkt);
-
+void blinker(byte led_pin, int count);
 
 //============================================================================
 //============================================================================
@@ -277,7 +276,7 @@ void printpanStampConfig()
 void printSensorValues(WirelessWaterDetector& psPkt)
 {
 
-  Serial.print("\n\rAddr = ");
+  Serial.print("Addr = ");
   Serial.print(psPkt.addressTx);
   
   Serial.print("\ttemp = ");
@@ -293,8 +292,7 @@ void printSensorValues(WirelessWaterDetector& psPkt)
   Serial.print(psPkt.rssi);
 
   Serial.print("\tLQI = ");
-  Serial.print(psPkt.lqi);
-
+  Serial.println(psPkt.lqi);
 
 } // end printSensorValues()
 
