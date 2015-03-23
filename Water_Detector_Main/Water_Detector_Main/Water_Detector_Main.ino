@@ -26,10 +26,10 @@ Change Log
 02/14/15 v2.09 - Removed printStates().  Size (IDE 1.0.5) 27,276 / 28,672 bytes
 02/27/15 v3.00 - Changed I2C so master requests a specific wireless sensor.  Added 3rd wireless sensor.  Added temperature to Sunday heartbeat alert.
                  Used F() with display.print() for OLED to free up some RAM.  Made an array of struct and got wireless data by looping through array.
+03/22/15 v3.01 - Removed code that prints version # if the letter v is typed into serial moniitor.  IDE 1.6.0 compile size 27,070
 */
 
-
-#define VERSION "v3.00"
+#define VERSION "v3.01"
 // #define PRINT_DEBUG      // Comment this out to turn off verbose printing
 
 #include <HardwareSerial.h>
@@ -250,16 +250,7 @@ void loop ()
     if( getTime(ntpTime) )
     { checkNtpTimer = millis() + MINUTE; }
   }
-  
-  // To let user see what version is running, code below looks for a v typed into the
-  // serial monitor.  If it sees V, it will display the version in the serial monitor
-  if ( Serial.available() )
-  {
-    byte serialData = Serial.read();
-    if( serialData == 86 || serialData == 118 )  // Check for upper and lower case V
-    { Serial.print(VERSION); }
-  }
-  
+    
 }  // end loop()
 
 
